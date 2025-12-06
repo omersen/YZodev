@@ -1,80 +1,102 @@
+
+import { jsPDF } from "jspdf";
 import { agendaData, homeworkData, policyTemplates, designChecklist } from "../data/content";
 
 export const exportCurriculum = () => {
-  const lines: string[] = [];
+  const doc = new jsPDF();
+  let yPos = 20;
+  const lineHeight = 7;
+  const pageHeight = doc.internal.pageSize.height;
+
+  const checkPageBreak = (spaceNeeded: number = 20) => {
+    if (yPos + spaceNeeded >= pageHeight) {
+      doc.addPage();
+      yPos = 20;
+    }
+  };
+
+  // Helper to add text
+  const addText = (text: string, fontSize: number = 10, isBold: boolean = false) => {
+    doc.setFontSize(fontSize);
+    doc.setFont("helvetica", isBold ? "bold" : "normal");
+    
+    // Turkish character handling workarounds for standard fonts
+    // Note: Standard PDF fonts have limited UTF-8 support. 
+    // In a production environment, we would load a custom font (e.g., Roboto).
+    // Here we accept standard font limitations for simplicity.
+    const splitText = doc.splitTextToSize(text, 180);
+    
+    if (yPos + (splitText.length * lineHeight) >= pageHeight) {
+      doc.addPage();
+      yPos = 20;
+    }
+    
+    doc.text(splitText, 15, yPos);
+    yPos += splitText.length * 6; // slightly tighter line spacing
+  };
 
   // Title
-  lines.push("# Fen & YZ Eğitim Portalı - Dijital Kılavuz");
-  lines.push(`Oluşturulma Tarihi: ${new Date().toLocaleDateString('tr-TR')}`);
-  lines.push("> Kaynak: Dijital Pedagoji ve Ölçmenin Yeni Vizyonu: Öğretmen Yetkinliklerinin Güçlendirilmesine Yönelik Yapay Zeka Dirençli Ödev Tasarımı Eğitimi");
-  lines.push("\n---\n");
+  doc.setFontSize(16);
+  doc.setFont("helvetica", "bold");
+  doc.text("Fen & YZ Egitim Portali - Dijital Kilavuz", 15, yPos);
+  yPos += 10;
+  
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "normal");
+  doc.text(`Olusturulma Tarihi: ${new Date().toLocaleDateString('tr-TR')}`, 15, yPos);
+  yPos += 15;
 
   // Section 1: 7-Dimension Framework
-  lines.push("## 1. Dijital Pedagoji ve Ölçmenin Yeni Vizyonu: Öğretmen Yetkinliklerinin Güçlendirilmesine Yönelik Yapay Zeka Dirençli Ödev Tasarımı Eğitimi (7 Boyut)\n");
-  lines.push("1. **Bilişsel Derinlik:** Bloom'un üst basamaklarını hedefler.");
-  lines.push("2. **Özgünlük:** Öğrencinin yerel ve kişisel bağlamını içerir.");
-  lines.push("3. **Süreç Şeffaflığı:** Süreç belgeleme araçlarını kullanır.");
-  lines.push("4. **YZ Etiği:** Şeffaflık ve dürüstlük ilkesini benimser.");
-  lines.push("5. **Çoklu Kanıt:** Sözlü savunma ve performans görevleri içerir.");
-  lines.push("6. **İşbirliği:** Sosyal öğrenmeyi destekler.");
-  lines.push("7. **Yansıtma:** Metacognition (bilişötesi) soruları içerir.");
-  lines.push("\n---\n");
+  addText("1. 7 Boyutlu Nitelikli Odev Tasarimi Cercevesi", 14, true);
+  yPos += 5;
+  addText("1. Bilisel Derinlik: Bloom'un ust basamaklarini hedefler.");
+  addText("2. Ozgunluk: Ogrencinin yerel ve kisisel baglamini icerir.");
+  addText("3. Surec Seffafligi: Surec belgeleme araclarini kullanir.");
+  addText("4. YZ Etigi: Seffaflik ve durustluk ilkesini benimser.");
+  addText("5. Coklu Kanit: Sozlu savunma ve performans gorevleri icerir.");
+  addText("6. Isbirligi: Sosyal ogrenmeyi destekler.");
+  addText("7. Yansitma: Metacognition (bilosotesi) sorulari icerir.");
+  yPos += 10;
 
   // Section 2: Agenda
-  lines.push("## 2. 4 Günlük Hizmet İçi Eğitim Programı\n");
+  checkPageBreak();
+  addText("2. 4 Gunluk Hizmet Ici Egitim Programi", 14, true);
+  yPos += 5;
   Object.values(agendaData).forEach(day => {
-    lines.push(`### ${day.title}`);
-    lines.push(`*Hedef: ${day.goal}*\n`);
+    checkPageBreak(30);
+    addText(`${day.title}`, 12, true);
+    addText(`Hedef: ${day.goal}`, 10, false);
+    yPos += 2;
     day.sessions.forEach(session => {
-      lines.push(`- **${session.time}** - ${session.title}`);
-      lines.push(`  ${session.desc}`);
+      addText(`- ${session.time}: ${session.title}`);
     });
-    lines.push("\n");
+    yPos += 5;
   });
-  lines.push("---\n");
-
-  // Section 3: Detailed Homework Examples
-  lines.push("## 3. Örnek Özgün Fen Ödevleri\n");
+  
+  // Section 3: Homework Examples
+  checkPageBreak();
+  addText("3. Ornek Ozgun Fen Odevleri", 14, true);
+  yPos += 5;
   homeworkData.forEach((hw, index) => {
-    lines.push(`### ${index + 1}. ${hw.title} (${hw.classLevel})`);
-    lines.push(`*Amaç: ${hw.aim}*\n`);
-    lines.push(`**Yönerge:** ${hw.instructions}\n`);
-    lines.push("**Adımlar:**");
-    hw.steps.forEach(step => lines.push(`- ${step}`));
-    lines.push(`\n**YZ Politikası:** ${hw.policy}`);
-    lines.push(`**Çıktı:** ${hw.deliverable}`);
-    lines.push(`\n**Değerlendirme (Rubrik Özeti):**`);
-    hw.rubric.forEach(r => {
-        lines.push(`- *${r.criteria}:* ${r.levels[4]} (Mükemmel)`);
-    });
-    lines.push("\n---\n");
+    checkPageBreak(50);
+    addText(`${index + 1}. ${hw.title} (${hw.classLevel})`, 12, true);
+    addText(`Amac: ${hw.aim}`);
+    addText(`Yonerge: ${hw.instructions}`);
+    addText(`Cikti: ${hw.deliverable}`);
+    yPos += 5;
   });
 
   // Section 4: Policies
-  lines.push("## 4. YZ Etik Beyan Şablonları\n");
+  checkPageBreak();
+  addText("4. YZ Etik Beyan Sablonlari", 14, true);
+  yPos += 5;
   policyTemplates.forEach(policy => {
-    lines.push(`### ${policy.title}`);
-    lines.push(`> "${policy.text}"\n`);
+    checkPageBreak(20);
+    addText(policy.title, 11, true);
+    addText(`"${policy.text}"`);
+    yPos += 3;
   });
 
-  // Section 5: Checklist
-  lines.push("\n## 5. Tasarım Kontrol Listesi\n");
-  designChecklist.forEach(item => {
-      lines.push(`- [ ] **${item.dimension}:** ${item.question}`);
-  });
-
-  // Create File
-  const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  
-  // Trigger Download
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "Nitelikli_Odev_Tasarim_Kilavuzu.md";
-  document.body.appendChild(link);
-  link.click();
-  
-  // Cleanup
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  // Save PDF
+  doc.save("Nitelikli_Odev_Tasarim_Kilavuzu.pdf");
 };
