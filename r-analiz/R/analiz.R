@@ -38,6 +38,12 @@ sayi_eki <- function(sayi, tur = c("iyelik", "iyelik_bulunma", "bulunma")) {
   paste0(s, "'", ek)
 }
 
+# Kappa gibi en çok 1 olabilen katsayılar için APA biçimi: 0.8166 -> ".82"
+# (bildiride kappa ".82" biçiminde yazılmış; yüzdeler ise ondalık virgüllü).
+katsayi_bicim <- function(x, basamak = 2) {
+  ifelse(is.na(x), "NA", sub("^(-?)0\\.", "\\1.", formatC(round(x, basamak), format = "f", digits = basamak)))
+}
+
 # Kategori sıklık tablosu (sıralı kategori düzeni korunur) ------------------------
 kategori_tablosu <- function(x, kategoriler) {
   bilinmeyen <- setdiff(unique(stats::na.omit(x)), kategoriler)

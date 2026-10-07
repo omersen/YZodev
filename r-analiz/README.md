@@ -31,6 +31,8 @@ Bu klasör, "Öğretmen adaylarınca hazırlanan ödevlerin üretken yapay zekâ
 
 Her betik `source("01_drive_indir.R")` biçiminde sırayla çalıştırılır. `veri/` ve `cikti/` klasörleri öğrenci verisi içerdiği için Git'e gönderilmez.
 
+**Özgün kodlarınız duruyorsa.** Sunumdaki sayıların özgün çalışmayla birebir aynı olması için API'yi yeniden çalıştırmanız gerekmez. Özgün kodlamaları `cikti/kodlama/` altına şu sütunlarla koymanız yeterlidir: `kodlayici1_tamamlanabilirlik.xlsx` ve `kodlayici2_tamamlanabilirlik.xlsx` için `odev_id`, `tekrar` (hep 1) ve `kategori` (dört kategori adı `00_ayarlar.R`'deki yazımla); `tasarim_nitelikleri.xlsx` için `nitelikler` sayfasında `odev_id` ve 0/1 nitelik sütunları, `kod_kitabi` sayfasında `sutun` ve `nitelik`. Ardından yalnızca `05_analiz.R` çalıştırılır.
+
 ## Yöntemsel notlar
 
 - **Standartlaştırma ve bağımsızlık.** Bütün yönergeler aynı sistem istemi, aynı şablon ve aynı parametrelerle gönderilir; `previous_response_id` ya da konuşma geçmişi kullanılmadığı için çağrılar arasında bağlam aktarılmaz. Her çağrıda yönerge, sistem istemi ve şablonun SHA-256 özetleri kaydedilir; bu sayede hangi çıktının hangi metinle üretildiği sonradan denetlenebilir.

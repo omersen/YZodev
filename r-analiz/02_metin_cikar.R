@@ -80,7 +80,7 @@ for (i in seq_len(nrow(envanter))) {
     ust_alt_bilgi = b$ust_alt_bilgi %||% "",
     olasi_kisisel_veri = paste(kv, collapse = ", "),
     yz_ifadesi_geciyor = grepl("(?i)yapay\\s*zek|chatgpt|\\bYZ\\b|\\bÜYZ\\b", metin, perl = TRUE),
-    ayni_icerik = envanter$ayni_icerik[i] %||% "",
+    ayni_icerik = if (is.null(envanter$ayni_icerik) || is.na(envanter$ayni_icerik[i])) "" else envanter$ayni_icerik[i],
     stringsAsFactors = FALSE
   )
 }

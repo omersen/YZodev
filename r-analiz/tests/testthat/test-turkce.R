@@ -20,6 +20,12 @@ test_that("yüzdeler ondalık virgülle yazılır", {
   expect_equal(yuzde_tr(0.8166, 2), "0,82")
 })
 
+test_that("katsayılar APA biçiminde yazılır", {
+  expect_equal(katsayi_bicim(0.8166), ".82")
+  expect_equal(katsayi_bicim(1), "1.00")
+  expect_equal(katsayi_bicim(-0.051), "-.05")
+})
+
 test_that("kategori tablosu sırayı korur ve tanımsız etikette durur", {
   kat <- c("A", "B", "C")
   expect_warning(t <- kategori_tablosu(c("C", "A", "C", NA), kat), "kodlanmamış")

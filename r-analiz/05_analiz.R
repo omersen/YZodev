@@ -16,8 +16,9 @@ kat <- AYAR$kategoriler
 ozet <- character(0)
 
 # 1. Tamamlanabilirlik dağılımı ------------------------------------------------------
-k1 <- xlsx_oku(file.path(kodlama_dizini, "kodlayici1_tamamlanabilirlik.xlsx"))
-k1 <- k1[k1$tekrar == 1, ]   # bildirideki analiz: ödev başına bir çağrı
+k1_tum <- xlsx_oku(file.path(kodlama_dizini, "kodlayici1_tamamlanabilirlik.xlsx"))
+if (is.null(k1_tum$tekrar)) k1_tum$tekrar <- 1   # elle hazırlanmış özgün kod dosyası için
+k1 <- k1_tum[k1_tum$tekrar %in% 1, ]   # bildirideki analiz: ödev başına bir çağrı
 dagilim <- kategori_tablosu(k1$kategori, kat)
 print(dagilim)
 N <- sum(dagilim$n)
@@ -33,7 +34,6 @@ ozet <- c(ozet, paste0(
 ))
 
 # Birden çok tekrar varsa: aynı ödevin tekrarları arasında kategori tutarlılığı
-k1_tum <- xlsx_oku(file.path(kodlama_dizini, "kodlayici1_tamamlanabilirlik.xlsx"))
 if (length(unique(k1_tum$tekrar)) > 1) {
   tutarlilik <- tapply(k1_tum$kategori, k1_tum$odev_id, function(x) length(unique(stats::na.omit(x))) == 1)
   ozet <- c(ozet, sprintf("Tekrarlar arasında aynı kategoriye giren ödev oranı: %%%s (%d/%d).",
@@ -55,8 +55,8 @@ if (file.exists(k2_yolu)) {
     kd <- uyusma$tablo[uyusma$tablo$agirlik == "dogrusal", ]
     ozet <- c(ozet, sprintf(
       "Rastgele seçilen %d ödev ikinci bir kodlayıcı tarafından bağımsız olarak sınıflandırılmış; ağırlıklı Cohen kappa (karesel ağırlık) %s [%%95 GA: %s, %s], (doğrusal ağırlık) %s [%s, %s]; yüzde uyum %%%s.",
-      uyusma$n, yuzde_tr(kq$kappa, 2), yuzde_tr(kq$ga_alt, 2), yuzde_tr(kq$ga_ust, 2),
-      yuzde_tr(kd$kappa, 2), yuzde_tr(kd$ga_alt, 2), yuzde_tr(kd$ga_ust, 2),
+      uyusma$n, katsayi_bicim(kq$kappa), katsayi_bicim(kq$ga_alt), katsayi_bicim(kq$ga_ust),
+      katsayi_bicim(kd$kappa), katsayi_bicim(kd$ga_alt), katsayi_bicim(kd$ga_ust),
       yuzde_tr(uyusma$yuzde_uyum)))
   }
 }

@@ -99,6 +99,8 @@ y3 <- txt_oku("veri/yonergeler/O003.txt")
 denetle(grepl("su t.ketimini", y3), "PDF metni okundu")
 kontrol <- xlsx_oku("veri/kontrol_listesi.xlsx")
 denetle(isTRUE(kontrol$taranmis_olabilir[kontrol$odev_id == "O146"]), "metin katmanı olmayan PDF işaretlendi")
+denetle(is.na(kontrol$dikkat[kontrol$odev_id == "O001"]) || !grepl("yinelenen|okunamadı", kontrol$dikkat[kontrol$odev_id == "O001"]),
+        "sorunsuz dosya yanlışlıkla işaretlenmedi")
 
 # Araştırmacının elle düzeltmesi korunuyor mu?
 txt_yaz("ELLE DÜZELTİLMİŞ YÖNERGE O002", "veri/yonergeler/O002.txt")
