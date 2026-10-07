@@ -2,6 +2,8 @@
 
 Bu klasör, "Öğretmen adaylarınca hazırlanan ödevlerin üretken yapay zekâ ile tamamlanabilirliği ve direnç odaklı tasarım nitelikleri" bildirisinde (X. EPOD Kongresi, 2026) betimlenen yöntemi R'da yeniden kurar: ödev dosyalarını Google Drive'dan alır, Word ve PDF dosyalarından yönerge metnini çıkarır, her yönergeyi OpenAI API'ye aynı sistem istemi ve aynı kullanıcı şablonuyla bağımsız bir çağrıda sunar, yanıtları kodlama formlarına aktarır ve bulgu tablolarını, kodlayıcılar arası uyuşmayı ve sunum grafiklerini üretir.
 
+Adım adım, sade bir anlatım için: [KULLANIM_KILAVUZU.md](KULLANIM_KILAVUZU.md)
+
 > **Önemli.** Özgün betik kaybolduğu için bu kod yöntemi yeniden kurar; özgün çıktıları yeniden üretmez. Aynı ayarlarla yeniden çalıştırmak bile farklı yanıtlar verebilir (aşağıdaki yöntemsel notlara bakın). Bildirideki sayılar özgün çalıştırmanın sonucudur; yeni bir çalıştırmanın sonuçları ayrı bir veri olarak raporlanmalıdır.
 
 ## Kurulum
