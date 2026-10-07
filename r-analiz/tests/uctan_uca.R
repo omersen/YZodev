@@ -184,6 +184,15 @@ sunucu$stop()
 cat("\n[4] 04_kodlama_formu.R\n")
 r <- adim("04_kodlama_formu.R", proje)
 denetle(r$durum == 0, "04 hatasız tamamlandı")
+denetle(nrow(xlsx_oku("cikti/kodlama/tasarim_nitelikleri.xlsx", "nitelikler")) == 147,
+        "nitelik şablonu API sonucundan bağımsız: onaylı 147 yönergenin hepsi var")
+# Araştırmacı teknik olarak tamamlanamayan 3 ödevi (kesik, API reddi, zaman aşımı)
+# analiz dışı bırakmaya karar verir:
+kontrol <- xlsx_oku("veri/kontrol_listesi.xlsx")
+kontrol$kontrol_edildi[kontrol$odev_id %in% c("O145", "O146", "O147")] <- "hayır"
+openxlsx::write.xlsx(kontrol, "veri/kontrol_listesi.xlsx", overwrite = TRUE)
+r <- adim("04_kodlama_formu.R", proje)
+denetle(r$durum == 0 && any(grepl("artık onaylı olmayan", r$cikti)), "04 yeniden çalıştı; onayı kaldırılan ödevler bildirildi")
 f1 <- xlsx_oku("cikti/kodlama/kodlayici1_tamamlanabilirlik.xlsx")
 f2 <- xlsx_oku("cikti/kodlama/kodlayici2_tamamlanabilirlik.xlsx")
 denetle(nrow(f1) == 144, "birinci kodlayıcı formunda 144 ödev (kesik, ret, zaman aşımı dışarıda)")
@@ -200,16 +209,20 @@ degis <- c(2, 9, 17, 30)   # dört ödevde bir basamak fark
 f2$kategori[degis] <- kat[pmin(4, pmax(1, match(f2$kategori[degis], kat) + c(1, -1, 1, -1)))]
 openxlsx::write.xlsx(list(kodlama = f2), "cikti/kodlama/kodlayici2_tamamlanabilirlik.xlsx", overwrite = TRUE)
 
-nf <- xlsx_oku("cikti/kodlama/tasarim_nitelikleri.xlsx", "nitelikler")
+nf_tum <- xlsx_oku("cikti/kodlama/tasarim_nitelikleri.xlsx", "nitelikler")
 kk <- xlsx_oku("cikti/kodlama/tasarim_nitelikleri.xlsx", "kod_kitabi")
+nf <- nf_tum[!nf_tum$odev_id %in% c("O145", "O146", "O147"), ]
 n <- nrow(nf)
 ata <- function(k, havuz = seq_len(n)) { x <- integer(n); x[sample(havuz, k)] <- 1L; x }
 nf$ozgu_girdi <- ata(83)
 nf$girdi_islevsel <- ata(49, which(nf$ozgu_girdi == 1))
+nf$girdi_islevsel[nf$ozgu_girdi == 0] <- NA        # koşullu alt kod: kodlayıcı boş bırakır
 nf$veri_toplama <- ata(53); nf$belgeleme <- ata(38)
 nf$belgeleme_yalniz_kanit <- ata(16, which(nf$belgeleme == 1))
+nf$belgeleme_yalniz_kanit[nf$belgeleme == 0] <- NA
 nf$surece_yayma <- ata(27); nf$yansitma <- ata(26); nf$karar_verme <- ata(19)
 nf$gerekcelendirme <- ata(7); nf$dogrulama <- ata(7)
+nf <- rbind(nf, nf_tum[nf_tum$odev_id %in% c("O145", "O146", "O147"), ])   # onaysız, kodlanmamış
 openxlsx::write.xlsx(list(nitelikler = nf, kod_kitabi = kk), "cikti/kodlama/tasarim_nitelikleri.xlsx", overwrite = TRUE)
 
 # --- 05: analiz ------------------------------------------------------------------------
@@ -224,6 +237,8 @@ beklenen <- c(
   "38 ödevin 16'sında (%42,1)"
 )
 for (b in beklenen) denetle(grepl(b, ozet, fixed = TRUE), paste0("özet cümlesi: \"", substr(b, 1, 60), "...\""))
+denetle(any(grepl("nitelik analizine alınmayan ödev\\(ler\\): O145, O146, O147", r$cikti)),
+        "onaysız ödevler nitelik analizinden çıkarıldı")
 tb <- openxlsx::read.xlsx("cikti/analiz/tablolar.xlsx", "nitelikler")
 denetle(identical(as.numeric(tb$n), c(83, 49, 53, 38, 16, 27, 26, 19, 7, 7)), "nitelik sıklıkları bildiriyle aynı")
 denetle(all(abs(tb$yuzde - c(57.6, 34.0, 36.8, 26.4, 11.1, 18.8, 18.1, 13.2, 4.9, 4.9)) < 0.05), "nitelik yüzdeleri bildiriyle aynı")
@@ -232,6 +247,20 @@ denetle(nrow(kp) == 3 && all(kp$ga_alt <= kp$kappa & kp$kappa <= kp$ga_ust), "ka
 if (requireNamespace("ggplot2", quietly = TRUE)) {
   denetle(file.exists("cikti/analiz/sekil1_tamamlanabilirlik.png"), "şekil 1 üretildi")
 }
+# --- Ayar değişikliği sonrası eski formlar sessizce kullanılmamalı ---------------
+cat("\n[6] Ayar değişikliği: eski kodlar korunmalı ama yeni çıktılarla karıştırılmamalı\n")
+sunucu <- webfakes::new_app_process(sahte_openai_uygulamasi(tempfile("sayac_")))
+writeLines(c(sprintf('AYAR$taban_url <- "%s"', sub("/$", "", sunucu$url("/v1"))),
+             "AYAR$azami_cikti_token <- 64000"), "ayarlar_yerel.R")
+r <- adim("03_yz_cagri.R", proje)
+denetle(any(grepl("0 çağrı önceden tamamlanmış; 144 çağrı yapılacak", r$cikti)),
+        "token sınırı değişince bütün ödevler yeniden çağrıldı")
+r <- adim("04_kodlama_formu.R", proje, beklenen_cikis = 1)
+denetle(r$durum != 0 && any(grepl("eski çıktılara aittir", r$cikti)), "04 eskimiş formu fark edip durdu")
+r <- adim("05_analiz.R", proje, beklenen_cikis = 1)
+denetle(r$durum != 0 && any(grepl("üretilmemiş", r$cikti)), "05 eski ayarlarla kodlanmış formu fark edip durdu")
+sunucu$stop()
+
 cat("\nKappa tablosu:\n"); print(kp)
 cat("\nÇıktı klasörü:", proje, "\n")
 cat(if (hatalar == 0) "\nTÜM DENETİMLER GEÇTİ\n" else sprintf("\n%d DENETİM KALDI\n", hatalar))

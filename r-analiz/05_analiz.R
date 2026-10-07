@@ -18,6 +18,15 @@ ozet <- character(0)
 # 1. Tamamlanabilirlik dağılımı ------------------------------------------------------
 k1_tum <- xlsx_oku(file.path(kodlama_dizini, "kodlayici1_tamamlanabilirlik.xlsx"))
 if (is.null(k1_tum$tekrar)) k1_tum$tekrar <- 1   # elle hazırlanmış özgün kod dosyası için
+# Form 04 tarafından üretildiyse, kodlanan çıktıların şu anki ayarlarla üretildiği denetlenir.
+if (!is.null(k1_tum$ayar_sha256)) {
+  gerekli_paketler(c("jsonlite", "digest"))
+  if (any(!k1_tum$ayar_sha256 %in% ayar_ozeti(AYAR))) {
+    stop("Kodlama formundaki çıktılar şu anki 00_ayarlar.R ayarlarıyla üretilmemiş (model, istem ya da ",
+         "parametre değişmiş). Ayarları kodlanan çalıştırmadakine döndürün ya da 04'ü yeniden çalıştırıp ",
+         "yeni çıktıları kodlayın.", call. = FALSE)
+  }
+}
 k1 <- k1_tum[k1_tum$tekrar %in% 1, ]   # bildirideki analiz: ödev başına bir çağrı
 dagilim <- kategori_tablosu(k1$kategori, kat)
 print(dagilim)
@@ -34,10 +43,18 @@ ozet <- c(ozet, paste0(
 ))
 
 # Birden çok tekrar varsa: aynı ödevin tekrarları arasında kategori tutarlılığı
-if (length(unique(k1_tum$tekrar)) > 1) {
-  tutarlilik <- tapply(k1_tum$kategori, k1_tum$odev_id, function(x) length(unique(stats::na.omit(x))) == 1)
-  ozet <- c(ozet, sprintf("Tekrarlar arasında aynı kategoriye giren ödev oranı: %%%s (%d/%d).",
-                          yuzde_tr(100 * mean(tutarlilik)), sum(tutarlilik), length(tutarlilik)))
+# Yalnızca TÜM tekrarları kodlanmış ödevler sayılır; tek tekrarı olan ödev "tutarlı" sayılmaz.
+R_tekrar <- max(k1_tum$tekrar, na.rm = TRUE)
+if (R_tekrar > 1) {
+  kodlu <- k1_tum[!is.na(k1_tum$kategori), ]
+  tam <- names(which(tapply(kodlu$tekrar, kodlu$odev_id, function(t) all(seq_len(R_tekrar) %in% t))))
+  tutarlilik <- tapply(kodlu$kategori[kodlu$odev_id %in% tam], kodlu$odev_id[kodlu$odev_id %in% tam],
+                       function(x) length(unique(x)) == 1)
+  dislanan <- length(unique(k1_tum$odev_id)) - length(tam)
+  ozet <- c(ozet, sprintf(paste0("Tüm %d tekrarı kodlanmış %d ödevde, tekrarlar arasında aynı kategoriye giren ",
+                                 "ödev oranı %%%s (%d/%d); eksik tekrarı olan %d ödev bu orana alınmadı."),
+                          R_tekrar, length(tam), yuzde_tr(100 * mean(tutarlilik)), sum(tutarlilik),
+                          length(tutarlilik), dislanan))
 }
 
 # 2. Kodlayıcılar arası uyuşma ----------------------------------------------------------
@@ -68,12 +85,30 @@ if (file.exists(nitelik_yolu)) {
   nf <- xlsx_oku(nitelik_yolu, "nitelikler")
   kk <- xlsx_oku(nitelik_yolu, "kod_kitabi")
   sutunlar <- intersect(kk$sutun, names(nf))
-  kodlu <- stats::complete.cases(nf[, sutunlar])
-  if (any(!kodlu)) message(sum(!kodlu), " ödevde tasarım nitelikleri eksik kodlanmış; analiz dışı bırakıldı.")
-  nf <- nf[kodlu, ]
+  # Kontrol listesinde artık onaylı olmayan ödevler çıkarılır (kontrol listesi
+  # yoksa, ör. özgün kodlar elle hazırlandıysa, şablondaki tüm ödevler alınır).
+  kontrol_yolu <- file.path(AYAR$veri_dizini, "kontrol_listesi.xlsx")
+  if (file.exists(kontrol_yolu)) {
+    kontrol <- xlsx_oku(kontrol_yolu)
+    onayli <- kontrol$odev_id[tolower(trimws(kontrol$kontrol_edildi %||% "")) %in% "evet"]
+    cikan <- setdiff(nf$odev_id, onayli)
+    if (length(cikan) > 0) {
+      message("Onaylı olmadığı için nitelik analizine alınmayan ödev(ler): ", paste(cikan, collapse = ", "))
+      nf <- nf[nf$odev_id %in% onayli, ]
+    }
+  }
+  # Koşullu alt kodlar (üst kod 0 ise boş = 0) tamamlanır; tutarsız ya da eksik
+  # kod varsa analiz açık bir hatayla durur (ödevler sessizce düşürülmez).
+  nf <- nitelikleri_denetle(nf, sutunlar)
   if (nrow(nf) > 0) {
     nitelikler <- nitelik_tablosu(nf, sutunlar, kk$nitelik[match(sutunlar, kk$sutun)])
     print(nitelikler)
+    disarida <- setdiff(nf$odev_id, k1$odev_id[!is.na(k1$kategori)])
+    if (length(disarida) > 0) {
+      ozet <- c(ozet, sprintf(paste0("Tasarım nitelikleri %d ödevde kodlanmıştır; bunların %s ",
+                                     "tamamlanabilirlik analizine girmemiştir (API reddi, kesik yanıt ya da kodlanmamış): %s."),
+                              nrow(nf), sayi_eki(length(disarida)), paste(disarida, collapse = ", ")))
+    }
 
     # Koşullu oranlar: bildirideki "83 ödevin 49'unda" türü ifadeler
     if (all(c("ozgu_girdi", "girdi_islevsel") %in% sutunlar)) {
@@ -82,10 +117,6 @@ if (file.exists(nitelik_yolu)) {
         "Öğrenciye özgü, kişisel veya yerel girdi isteyen %d ödevin yalnızca %s, yani bu ödevlerin %%%s ve tüm ödevlerin %%%s, söz konusu girdinin izleyen analiz veya yorumlama işlemlerinde kullanılması zorunlu tutulmuştur.",
         a, sayi_eki(b, "iyelik_bulunma"), sayi_eki(yuzde_tr(100 * b / a), "iyelik_bulunma"),
         sayi_eki(yuzde_tr(100 * b / nrow(nf)), "iyelik_bulunma")))
-      if (any(nf$girdi_islevsel == 1 & nf$ozgu_girdi == 0)) {
-        message("TUTARSIZLIK: girdi_islevsel = 1 olup ozgu_girdi = 0 olan ödev(ler) var: ",
-                paste(nf$odev_id[nf$girdi_islevsel == 1 & nf$ozgu_girdi == 0], collapse = ", "))
-      }
     }
     if (all(c("belgeleme", "belgeleme_yalniz_kanit") %in% sutunlar)) {
       a <- sum(nf$belgeleme == 1); b <- sum(nf$belgeleme == 1 & nf$belgeleme_yalniz_kanit == 1)
@@ -95,14 +126,16 @@ if (file.exists(nitelik_yolu)) {
 
     # Keşfedici çapraz tablo: nitelik var/yok x "büyük ölçüde veya tam tamamlandı"
     # Betimseldir; nitelikler birbirleriyle ilişkili olduğundan nedensel yorum yapılamaz.
-    ortak_n <- merge(nf, k1[, c("odev_id", "kategori")], by = "odev_id")
+    # Kodlanmamış (NA) tamamlanabilirlik dışarıda bırakılır; taban ana tabloyla aynıdır.
+    ortak_n <- merge(nf, k1[!is.na(k1$kategori), c("odev_id", "kategori")], by = "odev_id")
     ortak_n$yuksek <- ortak_n$kategori %in% kat[3:4]
     capraz <- do.call(rbind, lapply(sutunlar, function(s) {
       var_ <- ortak_n[[s]] == 1
       data.frame(nitelik = kk$nitelik[kk$sutun == s],
-                 n_var = sum(var_), yuksek_tamamlanma_var = round(100 * mean(ortak_n$yuksek[var_]), 1),
-                 n_yok = sum(!var_), yuksek_tamamlanma_yok = round(100 * mean(ortak_n$yuksek[!var_]), 1))
+                 n_var = sum(var_), yuksek_tamamlanma_var = yuvarla(100 * mean(ortak_n$yuksek[var_]), 1),
+                 n_yok = sum(!var_), yuksek_tamamlanma_yok = yuvarla(100 * mean(ortak_n$yuksek[!var_]), 1))
     }))
+    capraz$n_toplam <- nrow(ortak_n)
   }
 }
 
@@ -124,7 +157,7 @@ cubuk_grafik(dagilim, "kategori",
              sprintf("Ödevlerin ÜYZ ile tamamlanabilirliği (n = %d)", N),
              file.path(analiz_dizini, "sekil1_tamamlanabilirlik.png"))
 if (!is.null(nitelikler)) {
-  cubuk_grafik(nitelikler[!grepl("yalnızca", nitelikler$nitelik), ], "nitelik",
+  cubuk_grafik(nitelikler[!nitelikler$sutun %in% YARDIMCI_KODLAR, ], "nitelik",
                sprintf("Ödevlerde görülen tasarım nitelikleri (n = %d)", nrow(nf)),
                file.path(analiz_dizini, "sekil2_tasarim_nitelikleri.png"),
                sirala = TRUE, genislik = 11, yukseklik = 5.5)

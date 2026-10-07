@@ -2,9 +2,68 @@
 # Analiz yardımcıları: sıklık tabloları, ağırlıklı kappa, Türkçe sayı biçimi
 # =============================================================================
 
+# Yuvarlama: yarım değerler yukarı (6,25 -> 6,3) -----------------------------------
+# R'ın round() işlevi IEC 60559 gereği yarımları çifte yuvarlar (6,25 -> 6,2);
+# Excel, SPSS ve elle hesaplama ise yukarı yuvarlar. 144 tabanında 9, 45, 81 ve
+# 117 gibi sayılar bu nedenle 0,1 puan farklı çıkardı.
+yuvarla <- function(x, basamak = 1) {
+  sign(x) * floor(abs(x) * 10^basamak + 0.5 + 1e-9) / 10^basamak
+}
+
 # 42.36 -> "42,4" (Türkçe ondalık virgülü) ---------------------------------------
 yuzde_tr <- function(x, basamak = 1) {
-  formatC(round(x, basamak), format = "f", digits = basamak, decimal.mark = ",")
+  formatC(yuvarla(x, basamak), format = "f", digits = basamak, decimal.mark = ",")
+}
+
+# Tasarım nitelikleri kod kitabı ----------------------------------------------------
+# Bildirideki dokuz nitelik ve bir koşullu alt kod. 1 = var, 0 = yok.
+NITELIKLER <- c(
+  ozgu_girdi = "Öğrenciye özgü, kişisel veya yerel girdi",
+  girdi_islevsel = "Girdinin izleyen bilişsel işlemlerde işlevsel kullanımı",
+  veri_toplama = "Gerçek yaşamdan veri toplama",
+  belgeleme = "Belgeleme (fotoğraf, video, fiziksel ürün)",
+  belgeleme_yalniz_kanit = "Belgeleme yalnızca görevin yapıldığını kanıtlıyor",
+  surece_yayma = "Görevi sürece yayma",
+  yansitma = "Yansıtma",
+  karar_verme = "Karar verme",
+  gerekcelendirme = "Gerekçelendirme",
+  dogrulama = "Doğrulama"
+)
+# Koşullu kodlar: üst kod 0 ise alt kod uygulanamaz ve 0 sayılır.
+ALT_KODLAR <- c(girdi_islevsel = "ozgu_girdi", belgeleme_yalniz_kanit = "belgeleme")
+# Bildirideki dokuz nitelik arasında olmayan, yalnızca koşullu oran için tutulan kod
+YARDIMCI_KODLAR <- "belgeleme_yalniz_kanit"
+
+nitelik_kurali <- function(sutun) {
+  ifelse(sutun %in% names(ALT_KODLAR),
+         paste0("1 = var, 0 = yok. Yalnızca '", ALT_KODLAR[sutun], "' = 1 ise kodlayın; ",
+                "üst kod 0 ise boş bırakılabilir (0 sayılır)."),
+         "1 = var, 0 = yok. Boş bırakmayın.")
+}
+
+# Koşullu alt kodları tamamlar ve tutarlılığı denetler -------------------------
+# Döndürür: tamamlanmış data.frame; tutarsızlık ya da eksik kodda açık hatayla durur.
+nitelikleri_denetle <- function(nf, sutunlar) {
+  for (alt in intersect(names(ALT_KODLAR), sutunlar)) {
+    ust <- ALT_KODLAR[[alt]]
+    if (!ust %in% sutunlar) next
+    nf[[alt]][is.na(nf[[alt]]) & nf[[ust]] %in% 0] <- 0
+    tutarsiz <- nf$odev_id[nf[[alt]] %in% 1 & nf[[ust]] %in% 0]
+    if (length(tutarsiz) > 0) {
+      stop("Tutarsız kod: '", alt, "' = 1 ama '", ust, "' = 0 olan ödev(ler): ",
+           paste(tutarsiz, collapse = ", "), call. = FALSE)
+    }
+  }
+  gecersiz <- unlist(lapply(sutunlar, function(s) {
+    hatali <- !(nf[[s]] %in% c(0, 1))
+    if (any(hatali)) paste0(nf$odev_id[hatali], ":", s) else NULL
+  }))
+  if (length(gecersiz) > 0) {
+    stop(length(gecersiz), " hücre boş ya da 0/1 dışında (ödev:sütun): ",
+         paste(utils::head(gecersiz, 20), collapse = ", "),
+         if (length(gecersiz) > 20) " ..." else "", call. = FALSE)
+  }
+  nf
 }
 
 # Sayılara Türkçe ek (ünlü uyumu ve ünsüz benzeşmesi) ---------------------------
@@ -41,7 +100,7 @@ sayi_eki <- function(sayi, tur = c("iyelik", "iyelik_bulunma", "bulunma")) {
 # Kappa gibi en çok 1 olabilen katsayılar için APA biçimi: 0.8166 -> ".82"
 # (bildiride kappa ".82" biçiminde yazılmış; yüzdeler ise ondalık virgüllü).
 katsayi_bicim <- function(x, basamak = 2) {
-  ifelse(is.na(x), "NA", sub("^(-?)0\\.", "\\1.", formatC(round(x, basamak), format = "f", digits = basamak)))
+  ifelse(is.na(x), "NA", sub("^(-?)0\\.", "\\1.", formatC(yuvarla(x, basamak), format = "f", digits = basamak)))
 }
 
 # Kategori sıklık tablosu (sıralı kategori düzeni korunur) ------------------------
@@ -52,7 +111,7 @@ kategori_tablosu <- function(x, kategoriler) {
   x <- factor(x, levels = kategoriler)
   n <- as.vector(table(x))
   data.frame(kategori = kategoriler, n = n,
-             yuzde = round(100 * n / sum(n), 1), stringsAsFactors = FALSE)
+             yuzde = yuvarla(100 * n / sum(n), 1), stringsAsFactors = FALSE)
 }
 
 # Ağırlıklı Cohen kappa ------------------------------------------------------------
@@ -94,11 +153,11 @@ kappa_hesapla <- function(k1, k2, kategoriler, B = 2000, tohum = 1) {
   list(
     n = length(a),
     tablo = data.frame(
-      agirlik = names(turler), kappa = round(deger, 3),
-      ga_alt = round(ga[1, ], 3), ga_ust = round(ga[2, ], 3),
+      agirlik = names(turler), kappa = yuvarla(deger, 3),
+      ga_alt = yuvarla(ga[1, ], 3), ga_ust = yuvarla(ga[2, ], 3),
       stringsAsFactors = FALSE, row.names = NULL
     ),
-    yuzde_uyum = round(100 * mean(a == b), 1),
+    yuzde_uyum = yuvarla(100 * mean(a == b), 1),
     capraz_tablo = table(Kodlayici1 = factor(k1[tam], levels = kategoriler),
                          Kodlayici2 = factor(k2[tam], levels = kategoriler))
   )
@@ -107,9 +166,10 @@ kappa_hesapla <- function(k1, k2, kategoriler, B = 2000, tohum = 1) {
 # İkili (0/1) tasarım niteliği sütunları için sıklık tablosu ---------------------
 nitelik_tablosu <- function(d, sutunlar, etiketler = sutunlar) {
   data.frame(
+    sutun = sutunlar,
     nitelik = etiketler,
     n = vapply(sutunlar, function(s) sum(d[[s]] == 1, na.rm = TRUE), numeric(1)),
-    yuzde = vapply(sutunlar, function(s) round(100 * mean(d[[s]] == 1, na.rm = TRUE), 1), numeric(1)),
+    yuzde = vapply(sutunlar, function(s) yuvarla(100 * mean(d[[s]] == 1, na.rm = TRUE), 1), numeric(1)),
     stringsAsFactors = FALSE, row.names = NULL
   )
 }
