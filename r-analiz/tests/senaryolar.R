@@ -37,11 +37,15 @@ onayla <- function(ids, deger = "evet") {
   k$kontrol_edildi[k$odev_id %in% ids] <- deger
   openxlsx::write.xlsx(k, "veri/kontrol_listesi.xlsx", overwrite = TRUE)
 }
+# Excel'de kodlayan biri gibi: yalnızca boş kategori hücreleri doldurulur, satırlar
+# kaydırılmaz (boş satırlar yerinde kalır).
 kodla <- function(yol, sayfa = "kodlama", kategori = "Tam olarak tamamlandı") {
   wb <- openxlsx::loadWorkbook(yol)
-  d <- openxlsx::read.xlsx(wb, sayfa, skipEmptyCols = FALSE)
-  d$kategori[is.na(d$kategori)] <- kategori
-  openxlsx::writeData(wb, sayfa, d)
+  d <- openxlsx::read.xlsx(wb, sayfa, skipEmptyCols = FALSE, skipEmptyRows = FALSE)
+  k <- which(names(d) == "kategori")
+  for (i in which(!is.na(d$odev_id) & is.na(d$kategori))) {
+    openxlsx::writeData(wb, sayfa, kategori, startCol = k, startRow = i + 1, colNames = FALSE)
+  }
   openxlsx::saveWorkbook(wb, yol, overwrite = TRUE)
 }
 
@@ -122,7 +126,7 @@ denetle(adim("03_yz_cagri.R")$durum == 0, "03 ikinci tur")
 r <- adim("04_kodlama_formu.R")
 f1 <- xlsx_oku("cikti/kodlama/kodlayici1_tamamlanabilirlik.xlsx")
 denetle(r$durum == 0, "04 onay kaldırıldığında durmadı")
-denetle(any(grepl("onayı kaldırılan ödev satırları formda bırakıldı.*O005", r$cikti)), "onayı kaldırılan satır bildirildi ve korundu")
+denetle(any(grepl("analiz çerçevesi dışındaki.*O005", r$cikti)), "onayı kaldırılan satır bildirildi ve korundu")
 denetle(any(grepl("YENİDEN KODLAYIN\\): O001, O003", r$cikti)) && all(is.na(f1$kategori[f1$odev_id %in% c("O001", "O003")])),
         "yönergesi değişen ödevlerin satırları yenilendi, kodları boşaltıldı")
 denetle(all(f1$kategori[f1$odev_id %in% c("O004", "O006")] == "Tam olarak tamamlandı"), "değişmeyen ödevlerin kodları korundu")
@@ -267,6 +271,119 @@ writeLines(c('AYAR$taban_url <- "http://127.0.0.1:9/v1"', "AYAR$deneme_sayisi <-
 r <- adim("03_yz_cagri.R", beklenen_cikis = 1)
 denetle(r$durum != 0 && any(grepl("Art arda 3 çağrı", r$cikti)), "3 ardışık ağ hatasından sonra durdu")
 writeLines(c(taban_satiri, "AYAR$azami_cikti_token <- 64000"), "ayarlar_yerel.R")
+
+# --- Hücre notları yerinde güncellemede korunur ----------------------------------------
+cat("\n[O] Hücre notu korunur\n")
+wb <- openxlsx::loadWorkbook(yol1)
+openxlsx::writeComment(wb, "kodlama", col = 6, row = 2, comment = openxlsx::createComment("Emin değilim, tartışalım"))
+openxlsx::saveWorkbook(wb, yol1, overwrite = TRUE)
+onayla("O005")
+invisible(adim("03_yz_cagri.R"))
+r <- adim("04_kodlama_formu.R")
+denetle(any(grepl("comments", utils::unzip(yol1, list = TRUE)$Name)) && any(grepl("Yedek: kodlayici1", r$cikti)),
+        "form güncellenirken hücre notu korundu ve yedek alındı")
+kodla(yol1); kodla("cikti/kodlama/kodlayici2_tamamlanabilirlik.xlsx")
+
+# --- Kodlayıcıdan dönen eski kopya reddedilir --------------------------------------------
+cat("\n[P] Eski form kopyası\n")
+invisible(file.copy(yol1, "k1_eski.xlsx", overwrite = TRUE))
+txt_yaz("Ödev 8: parkları gözlemle; ölçütlerini gerekçelendir.", "veri/yonergeler/O008.txt")
+invisible(adim("03_yz_cagri.R")); invisible(adim("04_kodlama_formu.R"))
+kodla(yol1); kodla("cikti/kodlama/kodlayici2_tamamlanabilirlik.xlsx")
+invisible(file.copy(yol1, "k1_guncel.xlsx", overwrite = TRUE))
+invisible(file.copy("k1_eski.xlsx", yol1, overwrite = TRUE))
+r <- adim("05_analiz.R", beklenen_cikis = 1)
+denetle(r$durum != 0 && any(grepl("güncel API çağrısına ait değil.*O008", r$cikti)), "eski kopyadaki O008 satırı yakalandı")
+invisible(file.copy("k1_guncel.xlsx", yol1, overwrite = TRUE))
+
+# --- Onaylı ama yönergesi boşaltılmış ödev: 04 ve 05 aynı çerçeveyi kullanır --------
+cat("\n[Q] Boşaltılmış yönerge\n")
+r5 <- adim("05_analiz.R")
+n_once <- sum(openxlsx::read.xlsx("cikti/analiz/tablolar.xlsx", "tamamlanabilirlik")$n)
+o009 <- txt_oku("veri/yonergeler/O009.txt")
+txt_yaz("", "veri/yonergeler/O009.txt")
+r <- adim("04_kodlama_formu.R")
+denetle(any(grepl("analiz çerçevesi dışındaki.*O009", r$cikti)), "04 boş yönergeli ödevi çerçeve dışı saydı")
+r <- adim("05_analiz.R")
+n_sonra <- sum(openxlsx::read.xlsx("cikti/analiz/tablolar.xlsx", "tamamlanabilirlik")$n)
+denetle(r$durum == 0 && n_sonra == n_once - 1, "05 de aynı ödevi dışarıda bıraktı (N bir azaldı)")
+txt_yaz(o009, "veri/yonergeler/O009.txt")
+
+# --- Kategoriler ters sırada yazılırsa durulur --------------------------------------------
+cat("\n[R] Ters sıralı kategoriler\n")
+writeLines(c(taban_satiri, "AYAR$azami_cikti_token <- 64000", "AYAR$kategoriler <- rev(AYAR$kategoriler)"), "ayarlar_yerel.R")
+r <- adim("05_analiz.R", beklenen_cikis = 1)
+denetle(r$durum != 0 && any(grepl("en düşükten en yükseğe", r$cikti)), "ters sıralı kategorilerde durdu")
+writeLines(c(taban_satiri, "AYAR$azami_cikti_token <- 64000"), "ayarlar_yerel.R")
+
+# --- Nitelik sayfasında yinelenen satır ------------------------------------------------------
+cat("\n[S] Yinelenen nitelik satırı\n")
+invisible(file.copy(yoln, "nit_yedek.xlsx", overwrite = TRUE))
+wb <- openxlsx::loadWorkbook(yoln)
+nf <- openxlsx::read.xlsx(wb, "nitelikler", skipEmptyCols = FALSE)
+for (sut in intersect(names(NITELIKLER), names(nf))) nf[[sut]][is.na(nf[[sut]])] <- 0
+nf$isbirligi[is.na(nf$isbirligi)] <- 0
+openxlsx::writeData(wb, "nitelikler", rbind(nf, nf[1, ]))
+openxlsx::saveWorkbook(wb, yoln, overwrite = TRUE)
+r <- adim("05_analiz.R", beklenen_cikis = 1)
+denetle(r$durum != 0 && any(grepl("aynı ödev için birden çok satır", r$cikti)), "yinelenen nitelik satırında durdu")
+invisible(file.copy("nit_yedek.xlsx", yoln, overwrite = TRUE))
+
+# --- Dosya yazımı yarıda kalırsa değişiklik bir sonraki çalıştırmada yine algılanır ------
+cat("\n[T] Yazım yarıda kaldı\n")
+writeLines(c(taban_satiri, "AYAR$azami_cikti_token <- 64000",
+             'txt_yaz <- function(x, yol) { if (grepl("yonergeler/O010.txt$", yol) && !file.exists("gecildi")) { file.create("gecildi"); stop("Permission denied (test)") }; con <- file(yol, open = "wb"); on.exit(close(con)); writeBin(charToRaw(enc2utf8(x)), con) }'),
+           "ayarlar_yerel.R")
+for (i in 10:11) docx_yaz(envanter$yerel_yol[i], sprintf("Ödev %d: mahallendeki parkları gözlemle ve raporla. SÜRÜM2", i))
+r <- adim("02_metin_cikar.R", beklenen_cikis = 1)
+r <- adim("02_metin_cikar.R")
+denetle(any(grepl("kaynak dosyası değişen ödev\\(ler\\): O010, O011", r$cikti)) &&
+          grepl("SÜRÜM2", txt_oku("veri/yonergeler/O010.txt")) && grepl("SÜRÜM2", txt_oku("veri/yonergeler/O011.txt")),
+        "yarıda kalan yazımdan sonra değişiklik yeniden algılanıp uygulandı")
+writeLines(c(taban_satiri, "AYAR$azami_cikti_token <- 64000"), "ayarlar_yerel.R")
+
+# --- Drive dönüştürmesiyle okunan dosyada değişiklik algılanır ----------------------------
+cat("\n[U] Drive dönüştürmesiyle okunan dosya\n")
+env <- xlsx_oku("veri/envanter.xlsx")
+env <- rbind_doldur(list(env, data.frame(odev_id = "O013", drive_id = "d013", uzanti = "rtf", mime_turu = "application/rtf",
+                                        yerel_yol = "veri/ham/O013.rtf", indirme = "indirildi")))
+xlsx_yaz(env, "veri/envanter.xlsx")
+writeLines("{\\rtf1 sahte}", "veri/ham/O013.rtf")
+docx_yaz("veri/ham/O013.kaynak.docx", "Ödev 13: okulundaki geri dönüşümü incele. SÜRÜM1")
+writeLines(c(taban_satiri, "AYAR$azami_cikti_token <- 64000", "AYAR$drive_donusturme_izni <- TRUE",
+             "drive_baglan <- function(...) invisible(TRUE)", "libreoffice_docx_yap <- function(...) NA_character_",
+             'drive_donusturerek_oku <- function(id, ...) docx_metin_cikar("veri/ham/O013.kaynak.docx")'), "ayarlar_yerel.R")
+invisible(adim("02_metin_cikar.R"))
+k <- xlsx_oku("veri/kontrol_listesi.xlsx")
+denetle(isTRUE(k$okundu[k$odev_id == "O013"]) && grepl("drive-donusum", k$yontem[k$odev_id == "O013"]) &&
+          !grepl("okunamadı", k$dikkat[k$odev_id == "O013"] %||% ""), "Drive dönüştürmesi başarılı okuma sayıldı")
+docx_yaz("veri/ham/O013.kaynak.docx", "Ödev 13: okulundaki geri dönüşümü incele. SÜRÜM2")
+r <- adim("02_metin_cikar.R")
+denetle(any(grepl("kaynak dosyası değişen ödev\\(ler\\): O013", r$cikti)) && grepl("SÜRÜM2", txt_oku("veri/yonergeler/O013.txt")),
+        "Drive dönüştürmesiyle okunan dosyanın değişikliği algılandı")
+writeLines(c(taban_satiri, "AYAR$azami_cikti_token <- 64000"), "ayarlar_yerel.R")
+
+# --- Elle hazırlanmış özgün kodlar: boşluklu sütun başlıkları -------------------------
+cat("\n[V] Elle hazırlanmış özgün kod dosyaları\n")
+elle <- file.path(proje, "elle"); dir.create(file.path(elle, "R"), recursive = TRUE)
+invisible(file.copy(list.files(proje, pattern = "^0[0-5]_.*\\.R$", full.names = TRUE), elle))
+invisible(file.copy(list.files(file.path(proje, "R"), full.names = TRUE), file.path(elle, "R")))
+setwd(elle); dir.create("cikti/kodlama", recursive = TRUE)
+kat <- c("Tamamlanamadı", "Sınırlı ölçüde tamamlandı", "Büyük ölçüde tamamlandı", "Tam olarak tamamlandı")
+openxlsx::write.xlsx(list(kodlama = data.frame(odev_id = sprintf("A%02d", 1:8), tekrar = c(1, 1, NA, 1, 1, 1, 1, 1),
+                                               kategori = kat[c(4, 4, 3, 2, 1, 4, 3, 4)])),
+                     "cikti/kodlama/kodlayici1_tamamlanabilirlik.xlsx")
+openxlsx::write.xlsx(list(nitelikler = data.frame(odev_id = sprintf("A%02d", 1:8), `Karar verme` = c(1, 0, 1, 0, 0, 0, 1, 0),
+                                                  check.names = FALSE),
+                          kod_kitabi = data.frame(sutun = "Karar verme", nitelik = "Karar verme")),
+                     "cikti/kodlama/tasarim_nitelikleri.xlsx")
+r <- adim("05_analiz.R")
+nt <- openxlsx::read.xlsx("cikti/analiz/tablolar.xlsx", "nitelikler", sep.names = " ")
+denetle(r$durum == 0 && nt$n[nt$sutun == "Karar verme"] == 3, "boşluklu başlık okundu (Karar verme: 3)")
+denetle(any(grepl("1 satırda 'tekrar' boş; 1 kabul edildi", r$cikti)) &&
+          sum(openxlsx::read.xlsx("cikti/analiz/tablolar.xlsx", "tamamlanabilirlik")$n) == 8,
+        "elle hazırlanmış dosyada boş tekrar 1 sayıldı, ödev düşmedi")
+setwd(proje)
 
 cat("\nProje klasörü:", proje, "\n")
 cat(if (hatalar == 0) "\nTÜM DENETİMLER GEÇTİ\n" else sprintf("\n%d DENETİM KALDI\n", hatalar))

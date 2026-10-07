@@ -12,8 +12,11 @@
 # Yeniden çalıştırma:
 #   - Kodlanmış formların üzerine yazılmaz; kodlayıcının eklediği sütun ve
 #     sayfalar korunur.
+#   - Formlar YERİNDE güncellenir: değişen hücreler yazılır, yeni satırlar alta
+#     eklenir; kodlayıcının hücre notları, renklendirmeleri ve açılır listeleri
+#     korunur. Her değişiklikten önce formun yedeği (_yedek_) alınır.
 #   - Bir ödev, ayar ya da yönerge değiştiği için yeniden çağrıldıysa yalnızca o
-#     satır yeni çıktıyla değiştirilir (kodu boşaltılır); önce formun yedeği alınır.
+#     satır yeni çıktıyla değiştirilir (kodu boşaltılır).
 #   - Onayı kaldırılan ödevlerin satırları formda kalır; 05 bunları dışarıda bırakır.
 #   - Sonradan eklenen ödevler birinci kodlayıcı formuna ve nitelik şablonuna
 #     eklenir; ikinci kodlayıcı alt örneklemi hedef orana ulaşacak biçimde,
@@ -29,12 +32,7 @@ yonerge_dosyasi <- function(id) file.path(AYAR$veri_dizini, "yonergeler", paste0
 
 # Onaylı ve boş olmayan yönergeler: tasarım nitelikleri analizinin çerçevesi ----
 # (API sonucundan bağımsızdır; API'nin reddettiği ödevler de burada yer alır.)
-kontrol <- xlsx_oku(file.path(AYAR$veri_dizini, "kontrol_listesi.xlsx"))
-onayli <- kontrol$odev_id[tolower(trimws(kontrol$kontrol_edildi %||% "")) %in% "evet"]
-yonergeler <- vapply(onayli, function(id) {
-  if (file.exists(yonerge_dosyasi(id))) txt_oku(yonerge_dosyasi(id)) else ""
-}, "")
-yonergeler <- yonergeler[nzchar(trimws(yonergeler))]
+yonergeler <- onayli_yonergeler(AYAR)
 if (length(yonergeler) == 0) stop("Onaylı ve boş olmayan yönerge yok.")
 
 # Geçerli API çağrıları: tamamlanabilirlik kodlamasının çerçevesi ------------
@@ -117,23 +115,28 @@ form_kitabi <- function(d) {
   wb
 }
 
-# Var olan çalışma kitabında tek bir sayfayı baştan kurar; diğer sayfalar ve
-# sayfa sırası korunur. (Konumsal güncelleme, kodlayıcı satır boşalttıysa ya da
-# sütun eklediyse eski satırları ve kaymış açılır listeleri geride bırakabilir.)
-sayfayi_yenile <- function(wb, sayfa) {
-  sira <- names(wb)
-  openxlsx::removeWorksheet(wb, sayfa)
-  openxlsx::addWorksheet(wb, sayfa)
-  openxlsx::worksheetOrder(wb) <- match(sira, names(wb))
-  invisible(wb)
+# Yerinde güncelleme yardımcıları ---------------------------------------------------
+# Sayfa, boş satırlar dahil okunur; tablo satırı i, Excel'de i + 1. satırdır.
+sayfa_oku_tam <- function(wb, sayfa) {
+  openxlsx::read.xlsx(wb, sayfa, skipEmptyRows = FALSE, skipEmptyCols = FALSE, sep.names = " ")
 }
-
-# Formu yazar; dosya varsa diğer sayfaları ve kodlayıcının eklediği sütunları korur.
-form_dosyaya_yaz <- function(d, yol) {
-  if (!file.exists(yol)) return(xlsx_kaydet(form_kitabi(d), yol))
-  wb <- sayfayi_yenile(openxlsx::loadWorkbook(yol), "kodlama")
-  kodlama_sayfasi_yaz(wb, d)
-  xlsx_kaydet(wb, yol)
+hucre_yaz <- function(wb, sayfa, deger, satir, sutun) {
+  openxlsx::writeData(wb, sayfa, xml_guvenli(deger), startCol = sutun, startRow = satir, colNames = FALSE)
+}
+yedekle <- function(yol) {
+  yedek <- sub("\\.xlsx$", paste0("_yedek_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".xlsx"), yol)
+  file.copy(yol, yedek, overwrite = TRUE)
+  basename(yedek)
+}
+# Yeni satırları tablonun altına, sayfadaki başlık sırasına göre ekler.
+satir_ekle <- function(wb, sayfa, tum, yeni) {
+  if (nrow(yeni) == 0) return(integer(0))
+  for (s in setdiff(names(tum), names(yeni))) yeni[[s]] <- NA
+  yeni <- yeni[, names(tum), drop = FALSE]
+  yeni[] <- lapply(yeni, xml_guvenli)
+  baslangic <- nrow(tum) + 2
+  openxlsx::writeData(wb, sayfa, yeni, startRow = baslangic, colNames = FALSE)
+  baslangic:(baslangic + nrow(yeni) - 1)
 }
 
 # Boş bırakılmış "tekrar" hücrelerini çağrı dosyası adından (O001_t2_...) geri yükler.
@@ -144,69 +147,87 @@ tekrar_tamamla <- function(d) {
   t
 }
 
-# Var olan formu günceller.
+# Var olan formu yerinde günceller.
 #   eklenecek : formda yoksa eklenecek satırlar
 #   gecerli   : şu anki geçerli çağrılardan oluşan satırlar (eskimiş satırların yerine geçer)
-#   onayli_id : şu an onaylı ödevler (onaysız satırlara dokunulmaz)
+#   onayli_id : şu an analiz çerçevesindeki ödevler (diğer satırlara dokunulmaz)
 form_guncelle <- function(yol, eklenecek, gecerli, onayli_id) {
   if (!file.exists(yol)) {
-    form_dosyaya_yaz(eklenecek, yol)
+    xlsx_kaydet(form_kitabi(eklenecek), yol)
     message("Yazıldı: ", yol, " (", nrow(eklenecek), " satır)")
     return(invisible(eklenecek))
   }
-  mevcut <- xlsx_oku(yol, "kodlama")
-  if (is.null(mevcut$cagri_dosyasi)) {
-    stop(yol, " bu iş akışının eski bir sürümüyle oluşturulmuş (cagri_dosyasi sütunu yok). ",
-         "Dosyayı yeniden adlandırıp 04'ü yeniden çalıştırın.", call. = FALSE)
+  wb <- openxlsx::loadWorkbook(yol)
+  if (!"kodlama" %in% names(wb)) stop(yol, ": 'kodlama' sayfası bulunamadı.", call. = FALSE)
+  tum <- sayfa_oku_tam(wb, "kodlama")
+  if (is.null(tum$cagri_dosyasi) || is.null(tum$odev_id)) {
+    stop(yol, " bu iş akışının eski bir sürümüyle oluşturulmuş ya da başlıkları değiştirilmiş ",
+         "('odev_id', 'cagri_dosyasi' sütunları yok). Dosyayı yeniden adlandırıp 04'ü yeniden çalıştırın.", call. = FALSE)
   }
-  mevcut <- mevcut[!is.na(mevcut$odev_id), ]
-  mevcut$tekrar <- tekrar_tamamla(mevcut)
-  degisti <- FALSE
+  sutun <- function(ad) match(ad, names(tum))
+  dolu <- !is.na(tum$odev_id)
+  t <- tekrar_tamamla(tum)
+  degisiklik <- character(0)
 
-  onaysiz <- !mevcut$odev_id %in% onayli_id
+  geri <- which(dolu & is.na(suppressWarnings(as.integer(tum$tekrar))) & !is.na(t))
+  for (i in geri) hucre_yaz(wb, "kodlama", t[i], i + 1, sutun("tekrar"))
+  if (length(geri) > 0) degisiklik <- c(degisiklik, paste0(length(geri), " boş 'tekrar' hücresi geri yüklendi"))
+  tum$tekrar <- t
+
+  onaysiz <- dolu & !tum$odev_id %in% onayli_id
   if (any(onaysiz)) {
-    message(yol, ": onayı kaldırılan ödev satırları formda bırakıldı (05 bunları dışarıda bırakır): ",
-            paste(unique(mevcut$odev_id[onaysiz]), collapse = ", "))
+    message(yol, ": analiz çerçevesi dışındaki (onayı kaldırılmış ya da yönergesi boş) ödev satırları formda ",
+            "bırakıldı; 05 bunları dışarıda bırakır: ", paste(unique(tum$odev_id[onaysiz]), collapse = ", "))
   }
 
   anahtar <- function(x) paste(x$odev_id, x$tekrar, x$cagri_dosyasi)
-  eskimis <- which(!onaysiz & !anahtar(mevcut) %in% anahtar(gecerli))
+  eskimis <- which(dolu & !onaysiz & !anahtar(tum) %in% anahtar(gecerli))
   if (length(eskimis) > 0) {
-    yedek <- sub("\\.xlsx$", paste0("_yedek_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".xlsx"), yol)
-    file.copy(yol, yedek)
-    eslesme <- match(paste(mevcut$odev_id[eskimis], mevcut$tekrar[eskimis]), paste(gecerli$odev_id, gecerli$tekrar))
-    yenilenen <- eskimis[!is.na(eslesme)]
-    for (s in c("yonerge", "yz_ciktisi", "model_reddi", "cagri_dosyasi", "ayar_sha256")) {
-      mevcut[[s]][yenilenen] <- gecerli[[s]][eslesme[!is.na(eslesme)]]
+    eslesme <- match(paste(tum$odev_id[eskimis], tum$tekrar[eskimis]), paste(gecerli$odev_id, gecerli$tekrar))
+    for (j in seq_along(eskimis)) {
+      i <- eskimis[j]
+      if (!is.na(eslesme[j])) {
+        g <- gecerli[eslesme[j], ]
+        for (s in c("yonerge", "yz_ciktisi", "model_reddi", "cagri_dosyasi", "ayar_sha256")) {
+          if (!is.na(sutun(s))) { hucre_yaz(wb, "kodlama", g[[s]], i + 1, sutun(s)); tum[[s]][i] <- g[[s]] }
+        }
+        for (s in c("kategori", "gerekce")) {
+          if (!is.na(sutun(s))) { hucre_yaz(wb, "kodlama", NA_character_, i + 1, sutun(s)); tum[[s]][i] <- NA }
+        }
+      } else {   # artık geçerli çağrısı olmayan (ör. kesik) satır temizlenir
+        openxlsx::deleteData(wb, "kodlama", cols = seq_along(tum), rows = i + 1, gridExpand = TRUE)
+        tum[i, ] <- NA
+      }
     }
-    mevcut$kategori[yenilenen] <- NA
-    mevcut$gerekce[yenilenen] <- NA
-    yenilenen_id <- unique(mevcut$odev_id[yenilenen])
-    silinen <- eskimis[is.na(eslesme)]   # artık geçerli çağrısı olmayan (ör. kesik) satırlar
-    silinen_id <- unique(mevcut$odev_id[silinen])
-    if (length(silinen) > 0) mevcut <- mevcut[-silinen, ]
+    yenilenen_id <- unique(tum$odev_id[eskimis[!is.na(eslesme)]])
+    silinen_n <- sum(is.na(eslesme))
     message("UYARI: ", yol, " içinde ", length(eskimis), " satırın çıktısı eskimişti (ayar ya da yönerge ",
-            "değişti, ödev yeniden çağrıldı). Yedek: ", basename(yedek), ".",
+            "değişti, ödev yeniden çağrıldı).",
             if (length(yenilenen_id) > 0) paste0(" Yeni çıktıyla değiştirilip kodu boşaltılan (YENİDEN KODLAYIN): ",
                                                  paste(yenilenen_id, collapse = ", "), "."),
-            if (length(silinen_id) > 0) paste0(" Geçerli çağrısı kalmadığı için çıkarılan: ",
-                                               paste(silinen_id, collapse = ", "), "."))
-    degisti <- TRUE
+            if (silinen_n > 0) paste0(" Geçerli çağrısı kalmadığı için ", silinen_n, " satır temizlendi."))
+    degisiklik <- c(degisiklik, "eskimiş satırlar güncellendi")
   }
 
-  yeni <- eklenecek[!paste(eklenecek$odev_id, eklenecek$tekrar) %in% paste(mevcut$odev_id, mevcut$tekrar), ]
+  mevcut_anahtar <- paste(tum$odev_id, tum$tekrar)[!is.na(tum$odev_id)]
+  yeni <- eklenecek[!paste(eklenecek$odev_id, eklenecek$tekrar) %in% mevcut_anahtar, ]
   if (nrow(yeni) > 0) {
-    mevcut <- rbind_doldur(list(mevcut, yeni))
+    satirlar <- satir_ekle(wb, "kodlama", tum, yeni)
+    if (!is.na(sutun("kategori"))) liste_dogrulama(wb, "kodlama", sutun("kategori"), satirlar, AYAR$kategoriler)
+    openxlsx::addStyle(wb, "kodlama", openxlsx::createStyle(wrapText = TRUE, valign = "top"),
+                       rows = satirlar, cols = seq_len(min(7, ncol(tum))), gridExpand = TRUE, stack = TRUE)
     message(yol, ": var olan kodlar korunarak ", nrow(yeni), " yeni satır eklendi.")
-    degisti <- TRUE
+    degisiklik <- c(degisiklik, "yeni satırlar eklendi")
   }
-  if (degisti) {
-    sutunlar <- c(names(eklenecek), setdiff(names(mevcut), names(eklenecek)))   # ek sütunlar korunur
-    form_dosyaya_yaz(mevcut[, sutunlar], yol)
+
+  if (length(degisiklik) > 0) {
+    yedek <- yedekle(yol)
+    xlsx_kaydet(wb, yol)
+    message(yol, " güncellendi (", paste(degisiklik, collapse = "; "), "). Yedek: ", yedek)
   } else {
-    message("Var olan form korunuyor: ", yol, " (", nrow(mevcut), " satır)")
+    message("Var olan form korunuyor: ", yol)
   }
-  invisible(mevcut)
+  invisible(xlsx_oku(yol, "kodlama"))
 }
 
 form1 <- form_guncelle(file.path(kodlama_dizini, "kodlayici1_tamamlanabilirlik.xlsx"),
@@ -270,45 +291,56 @@ if (!file.exists(nitelik_yolu)) {
   xlsx_kaydet(wb, nitelik_yolu)
   message("Yazıldı: ", nitelik_yolu, " (", nrow(nitelik_formu), " ödev)")
 } else {
-  mevcut <- xlsx_oku(nitelik_yolu, "nitelikler")
-  mevcut <- mevcut[!is.na(mevcut$odev_id), ]
-  degisti <- FALSE
-  fazla <- setdiff(mevcut$odev_id, nitelik_formu$odev_id)
+  # Yerinde güncelleme: kod kitabına, diğer sayfalara, eklenen sütunlara, hücre
+  # notlarına ve biçimlendirmeye dokunulmaz.
+  wb <- openxlsx::loadWorkbook(nitelik_yolu)
+  tum <- sayfa_oku_tam(wb, "nitelikler")
+  if (is.null(tum$odev_id)) stop(nitelik_yolu, ": 'odev_id' sütunu bulunamadı.", call. = FALSE)
+  degisiklik <- character(0)
+  for (ek in c("yonerge_degisti", "yonerge_sha256")) {   # eski şablonlarda yoksa başlık eklenir
+    if (is.null(tum[[ek]])) {
+      hucre_yaz(wb, "nitelikler", ek, 1, ncol(tum) + 1)
+      tum[[ek]] <- NA_character_
+    }
+  }
+  sutun <- function(ad) match(ad, names(tum))
+  dolu <- !is.na(tum$odev_id)
+  fazla <- setdiff(tum$odev_id[dolu], nitelik_formu$odev_id)
   if (length(fazla) > 0) {
-    message("Nitelik şablonunda artık onaylı olmayan ödev(ler) var (silinmedi; 05 bunları dışarıda bırakır): ",
+    message("Nitelik şablonunda analiz çerçevesi dışındaki ödev(ler) var (silinmedi; 05 bunları dışarıda bırakır): ",
             paste(fazla, collapse = ", "))
   }
-  # Yönerge metni değişen satırlar
-  if (is.null(mevcut$yonerge_sha256)) mevcut$yonerge_sha256 <- NA_character_
-  if (is.null(mevcut$yonerge_degisti)) mevcut$yonerge_degisti <- NA_character_
-  m <- match(mevcut$odev_id, nitelik_formu$odev_id)
-  yeni_ozet <- nitelik_formu$yonerge_sha256[m]
-  ilk_kez <- is.na(mevcut$yonerge_sha256) & !is.na(m)
-  mevcut$yonerge_sha256[ilk_kez] <- yeni_ozet[ilk_kez]
-  if (any(ilk_kez)) degisti <- TRUE
-  farkli <- which(!is.na(m) & mevcut$yonerge_sha256 != yeni_ozet)
+  m <- match(tum$odev_id, nitelik_formu$odev_id)
+  guncel_ozet <- nitelik_formu$yonerge_sha256[m]
+  ilk_kez <- which(dolu & !is.na(m) & is.na(tum$yonerge_sha256))
+  for (i in ilk_kez) hucre_yaz(wb, "nitelikler", guncel_ozet[i], i + 1, sutun("yonerge_sha256"))
+  if (length(ilk_kez) > 0) degisiklik <- c(degisiklik, "yönerge özetleri eklendi")
+  farkli <- which(dolu & !is.na(m) & !is.na(tum$yonerge_sha256) & tum$yonerge_sha256 != guncel_ozet)
+  for (i in farkli) {
+    hucre_yaz(wb, "nitelikler", nitelik_formu$yonerge[m[i]], i + 1, sutun("yonerge"))
+    hucre_yaz(wb, "nitelikler", guncel_ozet[i], i + 1, sutun("yonerge_sha256"))
+    hucre_yaz(wb, "nitelikler", "EVET: kodları yeni metne göre gözden geçirin, sonra bu hücreyi silin",
+              i + 1, sutun("yonerge_degisti"))
+  }
   if (length(farkli) > 0) {
-    mevcut$yonerge[farkli] <- nitelik_formu$yonerge[m[farkli]]
-    mevcut$yonerge_sha256[farkli] <- yeni_ozet[farkli]
-    mevcut$yonerge_degisti[farkli] <- "EVET: kodları yeni metne göre gözden geçirin, sonra bu hücreyi silin"
     message("UYARI: nitelik şablonunda yönergesi değişen ödev(ler) (kodlar korundu, gözden geçirin): ",
-            paste(mevcut$odev_id[farkli], collapse = ", "))
-    degisti <- TRUE
+            paste(tum$odev_id[farkli], collapse = ", "))
+    degisiklik <- c(degisiklik, "değişen yönergeler işaretlendi")
   }
-  yeni <- nitelik_formu[!nitelik_formu$odev_id %in% mevcut$odev_id, ]
+  yeni <- nitelik_formu[!nitelik_formu$odev_id %in% tum$odev_id[dolu], ]
   if (nrow(yeni) > 0) {
-    mevcut <- rbind_doldur(list(mevcut, yeni))
+    satirlar <- satir_ekle(wb, "nitelikler", tum, yeni)
+    for (k in which(names(tum) %in% names(NITELIKLER))) {
+      openxlsx::dataValidation(wb, "nitelikler", cols = k, rows = satirlar,
+                               type = "whole", operator = "between", value = c(0, 1))
+    }
     message(nitelik_yolu, ": var olan kodlar korunarak ", nrow(yeni), " yeni ödev eklendi.")
-    degisti <- TRUE
+    degisiklik <- c(degisiklik, "yeni ödevler eklendi")
   }
-  if (degisti) {
-    yedek <- sub("\\.xlsx$", paste0("_yedek_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".xlsx"), nitelik_yolu)
-    file.copy(nitelik_yolu, yedek)
-    sutunlar <- c(names(nitelik_formu), setdiff(names(mevcut), names(nitelik_formu)))   # ek sütunlar korunur
-    wb <- sayfayi_yenile(openxlsx::loadWorkbook(nitelik_yolu), "nitelikler")         # kod_kitabi'ne dokunulmaz
-    nitelik_sayfasi_yaz(wb, mevcut[, sutunlar])
+  if (length(degisiklik) > 0) {
+    yedek <- yedekle(nitelik_yolu)
     xlsx_kaydet(wb, nitelik_yolu)
-    message("Nitelik şablonu güncellendi (yedek: ", basename(yedek), ").")
+    message("Nitelik şablonu güncellendi (", paste(degisiklik, collapse = "; "), "). Yedek: ", yedek)
   } else {
     message("Var olan nitelik şablonu korunuyor: ", nitelik_yolu)
   }

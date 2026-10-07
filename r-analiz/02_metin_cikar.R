@@ -9,19 +9,20 @@
 #                          Elle yapılan düzeltmelerin üzerine yazılmaz.
 #   kontrol_listesi.xlsx : her ödev için kalite göstergeleri ve elle doldurulacak
 #                          "kontrol_edildi" sütunu (evet/hayır).
-# Drive'daki kaynak dosya değişirse (ham metnin özeti kontrol listesinde tutulur):
+# Drive'daki kaynak dosya değişirse (yeni metin, metin_ham/<id>.txt ile karşılaştırılır):
 #   - yönerge hiç düzenlenmemişse yeni metinle değiştirilir;
 #   - elle düzenlenmişse yeni metin <id>.yeni.txt olarak yazılır. Bu dosya
 #     durdukça uyarı sürer ve 03 o ödevi göndermez; yönergeyi güncelleyip
 #     .yeni.txt dosyasını silin;
 #   - her iki durumda kontrol işareti sıfırlanır.
-# Dosyalar, kontrol listesi başarıyla kaydedildikten SONRA yazılır; liste Excel'de
-# açık olduğu için kayıt başarısız olursa hiçbir şey değişmez ve değişiklik bir
-# sonraki çalıştırmada yine algılanır. Okunamayan dosya "değişti" sayılmaz.
+# Yazım sırası: önce kontrol listesi, sonra yönerge/.yeni.txt, EN SON ham metin.
+# Böylece çalışma hangi adımda kesilirse kesilsin (ör. liste ya da bir dosya
+# başka programda açık), değişiklik bir sonraki çalıştırmada yeniden algılanır.
+# Okunamayan dosya "değişti" sayılmaz.
 # =============================================================================
 
 source("00_ayarlar.R", encoding = "UTF-8")
-gerekli_paketler(c("xml2", "pdftools", "stringi", "openxlsx", "digest"))
+gerekli_paketler(c("xml2", "pdftools", "stringi", "openxlsx"))
 
 envanter <- xlsx_oku(file.path(AYAR$veri_dizini, "envanter.xlsx"))
 ham_metin_dizini <- file.path(AYAR$veri_dizini, "metin_ham")
@@ -75,30 +76,29 @@ for (i in seq_len(nrow(envanter))) {
   }
 
   metin <- if (is.na(r$metin)) "" else r$metin
-  okundu <- nzchar(trimws(metin)) && !grepl("HATA|yok|desteklenmeyen", r$yontem)
+  # Okuma başarısı, metni SON üreten yönteme göre değerlendirilir
+  # (ör. "yerel-arac-yok -> drive-donusum" başarılı bir okumadır).
+  son_yontem <- sub("^.*-> ", "", r$yontem)
+  okundu <- nzchar(trimws(metin)) && !grepl("HATA|yok|desteklenmeyen", son_yontem)
   ham_yol <- file.path(ham_metin_dizini, paste0(id, ".txt"))
   hedef <- file.path(yonerge_dizini, paste0(id, ".txt"))
   yeni_yol <- file.path(yonerge_dizini, paste0(id, ".yeni.txt"))
 
-  # Değişiklik, kontrol listesinde saklanan son ham metin özetine göre belirlenir.
-  onceki_ozet <- eski_deger(id, "ham_sha256")
-  yeni_ozet <- sha256(metin_temizle(metin))
-  kaynak_degisti <- okundu && !is.na(onceki_ozet) && !identical(onceki_ozet, yeni_ozet)
-  ham_ozet <- if (okundu || is.na(onceki_ozet)) yeni_ozet else onceki_ozet   # okunamazsa referans korunur
+  onceki_ham <- if (file.exists(ham_yol)) txt_oku(ham_yol) else NA_character_
+  kaynak_degisti <- okundu && !is.na(onceki_ham) && !identical(metin_temizle(onceki_ham), metin_temizle(metin))
 
   gonderilecek <- if (file.exists(hedef)) txt_oku(hedef) else metin
   if (!file.exists(hedef)) {
     yazilacak[[length(yazilacak) + 1]] <- list(hedef, metin)
   } else if (kaynak_degisti) {
-    onceki_ham <- if (file.exists(ham_yol)) txt_oku(ham_yol) else NA_character_
-    duzenlenmemis <- !is.na(onceki_ham) && identical(metin_temizle(gonderilecek), metin_temizle(onceki_ham))
-    if (duzenlenmemis) {
-      yazilacak[[length(yazilacak) + 1]] <- list(hedef, metin)
+    if (identical(metin_temizle(gonderilecek), metin_temizle(onceki_ham))) {
+      yazilacak[[length(yazilacak) + 1]] <- list(hedef, metin)   # hiç düzenlenmemiş
       gonderilecek <- metin
     } else {
-      yazilacak[[length(yazilacak) + 1]] <- list(yeni_yol, metin)
+      yazilacak[[length(yazilacak) + 1]] <- list(yeni_yol, metin) # elle düzenlenmiş
     }
   }
+  # Ham metin (karşılaştırma referansı) bu ödevin diğer dosyalarından SONRA yazılır.
   if (okundu || !file.exists(ham_yol)) yazilacak[[length(yazilacak) + 1]] <- list(ham_yol, metin)
   bekleyen_yeni <- file.exists(yeni_yol) || any(vapply(yazilacak, function(y) identical(y[[1]], yeni_yol), logical(1)))
 
@@ -123,9 +123,9 @@ for (i in seq_len(nrow(envanter))) {
     olasi_kisisel_veri = paste(kv, collapse = ", "),
     yz_ifadesi_geciyor = grepl("(?i)yapay\\s*zek|chatgpt|\\bYZ\\b|\\bÜYZ\\b", gonderilecek, perl = TRUE),
     ayni_icerik = if (is.null(envanter$ayni_icerik) || is.na(envanter$ayni_icerik[i])) "" else envanter$ayni_icerik[i],
+    okundu = okundu,
     kaynak_degisti = kaynak_degisti,
     yeni_surum_bekliyor = bekleyen_yeni,
-    ham_sha256 = ham_ozet,
     stringsAsFactors = FALSE
   )
 }
@@ -140,7 +140,7 @@ kontrol$dikkat <- trimws(paste(
   ifelse(nzchar(kontrol$olasi_kisisel_veri), "olası kişisel veri;", ""),
   ifelse(nzchar(kontrol$ust_alt_bilgi), "üst/alt bilgi var (gönderilmez);", ""),
   ifelse(nzchar(kontrol$ayni_icerik), "yinelenen dosya;", ""),
-  ifelse(grepl("HATA|yok|desteklenmeyen", kontrol$yontem), "okunamadı;", ""),
+  ifelse(!kontrol$okundu, "okunamadı;", ""),
   ifelse(kontrol$kaynak_degisti & !kontrol$yeni_surum_bekliyor,
          "KAYNAK DOSYA DEĞİŞTİ: yönerge yeni metinle güncellendi, yeniden kontrol edin;", ""),
   ifelse(kontrol$yeni_surum_bekliyor,

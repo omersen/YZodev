@@ -78,7 +78,8 @@ rbind_doldur <- function(liste) {
 # farklı kodlamayla kaydettiği için CSV yerine xlsx). Boş sütunlar korunur.
 # Boş ya da yalnızca boşluk içeren hücreler NA olarak okunur.
 xlsx_oku <- function(yol, sayfa = 1) {
-  x <- openxlsx::read.xlsx(yol, sheet = sayfa, skipEmptyCols = FALSE, skipEmptyRows = TRUE)
+  # sep.names = " ": "Karar verme" gibi boşluklu başlıklar "Karar.verme"ye dönüşmez.
+  x <- openxlsx::read.xlsx(yol, sheet = sayfa, skipEmptyCols = FALSE, skipEmptyRows = TRUE, sep.names = " ")
   x[] <- lapply(x, function(v) {
     if (is.character(v)) { v <- trimws(v); v[!is.na(v) & !nzchar(v)] <- NA }
     v
@@ -99,3 +100,14 @@ txt_yaz <- function(x, yol) {
 }
 
 zaman_damgasi <- function() format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+
+# Analiz çerçevesi: kontrol listesinde onaylanmış (kontrol_edildi = evet) VE
+# yönerge dosyası boş olmayan ödevler. 04 ve 05 aynı tanımı kullanır.
+# Döndürür: ödev kimlikleriyle adlandırılmış yönerge metinleri.
+onayli_yonergeler <- function(ayar) {
+  kontrol <- xlsx_oku(file.path(ayar$veri_dizini, "kontrol_listesi.xlsx"))
+  onayli <- kontrol$odev_id[tolower(trimws(kontrol$kontrol_edildi %||% "")) %in% "evet"]
+  yol <- function(id) file.path(ayar$veri_dizini, "yonergeler", paste0(id, ".txt"))
+  y <- vapply(onayli, function(id) if (file.exists(yol(id))) txt_oku(yol(id)) else "", "")
+  y[nzchar(trimws(y))]
+}

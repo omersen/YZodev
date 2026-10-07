@@ -192,7 +192,7 @@ kontrol <- xlsx_oku("veri/kontrol_listesi.xlsx")
 kontrol$kontrol_edildi[kontrol$odev_id %in% c("O145", "O146", "O147")] <- "hayır"
 openxlsx::write.xlsx(kontrol, "veri/kontrol_listesi.xlsx", overwrite = TRUE)
 r <- adim("04_kodlama_formu.R", proje)
-denetle(r$durum == 0 && any(grepl("artık onaylı olmayan", r$cikti)), "04 yeniden çalıştı; onayı kaldırılan ödevler bildirildi")
+denetle(r$durum == 0 && any(grepl("analiz çerçevesi dışındaki", r$cikti)), "04 yeniden çalıştı; onayı kaldırılan ödevler bildirildi")
 f1 <- xlsx_oku("cikti/kodlama/kodlayici1_tamamlanabilirlik.xlsx")
 f2 <- xlsx_oku("cikti/kodlama/kodlayici2_tamamlanabilirlik.xlsx")
 denetle(nrow(f1) == 144, "birinci kodlayıcı formunda 144 ödev (kesik, ret, zaman aşımı dışarıda)")
