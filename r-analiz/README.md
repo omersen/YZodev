@@ -22,10 +22,10 @@ Bu klasör, "Öğretmen adaylarınca hazırlanan ödevlerin üretken yapay zekâ
 
 | Betik | Yaptığı | Başlıca çıktı |
 |---|---|---|
-| `01_drive_indir.R` | Klasörü alt klasörleriyle tarar, kısayolları çözer, dosyaları anonim adlarla (O001, O002...) indirir; aynı içerikli dosyaları işaretler | `veri/envanter.csv`, `veri/kimlik_eslestirme.csv` |
+| `01_drive_indir.R` | Klasörü alt klasörleriyle tarar, kısayolları çözer, dosyaları anonim adlarla (O001, O002...) indirir; aynı içerikli dosyaları işaretler | `veri/envanter.xlsx`, `veri/kimlik_eslestirme.xlsx` |
 | `02_metin_cikar.R` | docx, Google Dokümanlar, pdf, doc/odt/rtf dosyalarından metin çıkarır; tabloları satır satır, metin kutularını bir kez, dipnotları ve Word denklemlerini okur; taranmış PDF, görsel, olası kişisel veri gibi durumları işaretler | `veri/yonergeler/*.txt`, `veri/kontrol_listesi.xlsx` |
 | (elle) | `veri/yonergeler/*.txt` dosyalarını okuyun; ad-soyad, numara, kapak sayfası gibi yönerge dışı metni silin; `kontrol_listesi.xlsx` içinde `kontrol_edildi = evet` yapın | |
-| `03_yz_cagri.R` | Onaylanan her yönergeyi bağımsız bir API çağrısıyla gönderir; istek ve ham yanıtı saklar; kesintide kaldığı yerden devam eder | `cikti/api_kayitlari/`, `cikti/cagri_kaydi.csv`, `cikti/oturum_*.json` |
+| `03_yz_cagri.R` | Onaylanan her yönergeyi bağımsız bir API çağrısıyla gönderir; istek ve ham yanıtı saklar; kesintide kaldığı yerden devam eder | `cikti/api_kayitlari/` (istek, ham yanıt, çıktı ve kayıt dosyaları), `cikti/cagri_kaydi.xlsx`, `cikti/oturum_*.json` |
 | `04_kodlama_formu.R` | Yönerge ve YZ çıktısını yan yana koyan Excel kodlama formları; ikinci kodlayıcı için tohumla seçilmiş %25'lik kör alt örneklem; tasarım nitelikleri şablonu | `cikti/kodlama/*.xlsx` |
 | `05_analiz.R` | Kategori dağılımı, ağırlıklı kappa (doğrusal ve karesel, bootstrap %95 GA), tasarım nitelikleri sıklıkları, keşfedici çapraz tablo, sunum grafikleri ve bildiri biçiminde Türkçe özet cümleleri | `cikti/analiz/` |
 
@@ -48,7 +48,7 @@ Her betik `source("01_drive_indir.R")` biçiminde sırayla çalıştırılır. `
 
 ## Veri koruma
 
-Öğrenci adları yalnızca `veri/kimlik_eslestirme.csv` dosyasında kalır; indirilen dosyalar, metinler ve formlar anonim kimliklerle adlandırılır. API'ye gönderilen metinden kişisel bilgiler elle çıkarılmalıdır; `02_metin_cikar.R` e-posta, telefon, uzun sayı ve "Ad Soyad" gibi örüntüleri yalnızca uyarı amaçlı işaretler. İstekler `store = false` ile gönderilir (Responses API'de bu alan atlanırsa yanıt OpenAI'de en az 30 gün saklanır). OpenAI'nin API verisini eğitimde kullanmama ve kötüye kullanım denetimi için saklama koşulları kurumunuzun etik kurul ve KVKK değerlendirmesi için güncel belgeden ayrıca doğrulanmalıdır.
+Öğrenci adları yalnızca `veri/kimlik_eslestirme.xlsx` dosyasında kalır; indirilen dosyalar, metinler ve formlar anonim kimliklerle adlandırılır. API'ye gönderilen metinden kişisel bilgiler elle çıkarılmalıdır; `02_metin_cikar.R` e-posta, telefon, uzun sayı ve "Ad Soyad" gibi örüntüleri yalnızca uyarı amaçlı işaretler. İstekler `store = false` ile gönderilir (Responses API'de bu alan atlanırsa yanıt OpenAI'de en az 30 gün saklanır). OpenAI'nin API verisini eğitimde kullanmama ve kötüye kullanım denetimi için saklama koşulları kurumunuzun etik kurul ve KVKK değerlendirmesi için güncel belgeden ayrıca doğrulanmalıdır.
 
 ## Testler
 

@@ -57,21 +57,62 @@ test_that("Chat yanıtı: finish_reason = length kesik sayılır", {
   expect_equal(a$durum, "incomplete"); expect_equal(a$eksik_nedeni, "length"); expect_equal(a$cikti, "yarım")
 })
 
-test_that("geçerli çağrı seçimi: farklı model, değişen yönerge ve başarısız deneme elenir", {
+test_that("geçerli çağrı seçimi: farklı ayar, değişen yönerge ve başarısız deneme elenir", {
   y <- c(O1 = "bir", O2 = "iki", O3 = "üç")
-  satir <- function(id, zaman, model = "gpt-5.6-sol", yon = y[[id]], http = 200, durum = "completed")
-    data.frame(odev_id = id, tekrar = 1, baslangic_utc = zaman, model_istenen = model,
-               yonerge_sha256 = sha256(yon), sistem_istemi_sha256 = sha256(ayar$sistem_istemi),
-               sablon_sha256 = sha256(ayar$kullanici_sablonu), http_durum = http, durum = durum)
-  kayit <- rbind(satir("O1", "2026-10-01T10:00"), satir("O1", "2026-10-01T11:00", model = "x", http = 400, durum = NA),
+  satir <- function(id, zaman, a = ayar, yon = y[[id]], http = 200, durum = "completed")
+    data.frame(odev_id = id, tekrar = 1, baslangic_utc = zaman, ayar_sha256 = ayar_ozeti(a),
+               yonerge_sha256 = sha256(yon), http_durum = http, durum = durum)
+  kayit <- rbind(satir("O1", "2026-10-01T10:00"),
+                 satir("O1", "2026-10-01T11:00", a = modifyList(ayar, list(model = "x")), http = 400, durum = "http_hatasi"),
                  satir("O2", "2026-10-01T10:00", yon = "eski metin"),
                  satir("O3", "2026-10-01T09:00"), satir("O3", "2026-10-01T12:00"))
   g <- gecerli_cagrilar(kayit, ayar, y)
   expect_equal(sort(g$odev_id), c("O1", "O3"))
   expect_equal(g$baslangic_utc[g$odev_id == "O3"], "2026-10-01T12:00")
+  # Herhangi bir üretim ayarı değişirse hiçbir eski çağrı geçerli sayılmaz
+  expect_equal(nrow(gecerli_cagrilar(kayit, modifyList(ayar, list(azami_cikti_token = 64000)), y)), 0)
+  expect_equal(nrow(gecerli_cagrilar(kayit, modifyList(ayar, list(akil_yurutme_duzeyi = "high")), y)), 0)
+  expect_equal(nrow(gecerli_cagrilar(kayit, modifyList(ayar, list(sistem_istemi = "başka")), y)), 0)
+})
+
+test_that("yeniden deneme: geçici hatada bekler, kalıcı hatada ve zaman aşımında durur", {
+  sayac <- 0
+  yanitlar <- list(httr2::response(429, headers = list(`Retry-After` = "7")), httr2::response(500),
+                   httr2::response(200, body = charToRaw("{}")))
+  bekleyisler <- c()
+  httr2::local_mocked_responses(function(req) { sayac <<- sayac + 1; yanitlar[[sayac]] })
+  r <- istek_gonder(httr2::req_error(httr2::request("https://ornek.test"), is_error = function(x) FALSE),
+                    5, bekle = function(s) bekleyisler <<- c(bekleyisler, s))
+  expect_equal(httr2::resp_status(r), 200)
+  expect_equal(bekleyisler, c(7, 4))   # Retry-After'a uyuldu, sonra üstel bekleme
+  kota <- httr2::response(429, body = charToRaw('{"error":{"code":"insufficient_quota"}}'))
+  expect_false(gecici_hata_mi(kota))
+  expect_false(gecici_hata_mi(httr2::response(400)))
+  expect_true(zaman_asimi_mi(simpleError("Timeout was reached: Operation timed out after 600001 ms")))
 })
 
 test_that("anahtar yoksa açık hata verilir", {
   withr::local_envvar(OPENAI_API_KEY = "")
   expect_error(api_anahtari(), "Renviron")
+})
+
+test_that("çağrı kaydı JSON'dan eksiksiz geri okunur (NA, Türkçe metin, farklı sütunlar)", {
+  d <- tempfile("kayit_"); dir.create(d)
+  s1 <- data.frame(odev_id = "O1", tekrar = 1, baslangic_utc = "2026-10-01T10:00:00.000Z",
+                   http_durum = 200L, durum = "completed", ret = "", hata = NA_character_, sure_sn = 12.25)
+  s2 <- data.frame(odev_id = "O2", tekrar = 1, baslangic_utc = "2026-10-01T09:00:00.000Z",
+                   http_durum = NA_integer_, durum = "zaman_asimi", hata = "Zaman aşımı: ğüşıöç")
+  kayit_satiri_yaz(s1, file.path(d, "O1_t1_a")); kayit_satiri_yaz(s2, file.path(d, "O2_t1_b"))
+  k <- kayitlari_oku(d)
+  expect_equal(k$odev_id, c("O2", "O1"))             # zamana göre sıralı
+  expect_equal(k$hata[1], "Zaman aşımı: ğüşıöç")
+  expect_true(is.na(k$http_durum[1])); expect_equal(k$http_durum[2], 200)
+  expect_equal(k$ret[2], ""); expect_true(is.na(k$ret[1]))
+  expect_equal(k$sure_sn[2], 12.25)
+  expect_null(kayitlari_oku(tempfile()))
+})
+
+test_that("Excel dosyası yazılamazsa sessizce geçmez, açık hata verir", {
+  skip_if_not_installed("openxlsx")
+  expect_error(xlsx_yaz(data.frame(a = 1), file.path(tempfile(), "yok", "x.xlsx")), "yazılamadı")
 })

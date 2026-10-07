@@ -17,7 +17,8 @@ gerekli_paketler("openxlsx")
 kodlama_dizini <- file.path(AYAR$cikti_dizini, "kodlama")
 dir.create(kodlama_dizini, showWarnings = FALSE, recursive = TRUE)
 
-kayit <- csv_oku(file.path(AYAR$cikti_dizini, "cagri_kaydi.csv"))
+kayit <- kayitlari_oku(file.path(AYAR$cikti_dizini, "api_kayitlari"))
+if (is.null(kayit)) stop("API çağrı kaydı bulunamadı; önce 03_yz_cagri.R'ı çalıştırın.")
 yonerge_dosyasi <- function(id) file.path(AYAR$veri_dizini, "yonergeler", paste0(id, ".txt"))
 ids <- unique(kayit$odev_id)
 yonergeler <- vapply(ids, function(id) txt_oku(yonerge_dosyasi(id)), "")
@@ -27,7 +28,8 @@ if (nrow(son) == 0) stop("Şu anki ayarlarla tamamlanmış API çağrısı yok."
 eksik <- setdiff(ids, son$odev_id)
 if (length(eksik) > 0) {
   message("Şu anki ayarlarla tamamlanmış çağrısı olmayan ödev(ler) forma alınmadı: ",
-          paste(eksik, collapse = ", "), "\n(kesik/hatalı yanıt ya da çağrıdan sonra değiştirilmiş yönerge).")
+          paste(eksik, collapse = ", "),
+          "\n(kesik yanıt, API reddi, hata ya da çağrıdan sonra değiştirilmiş yönerge; 03'ün özetine bakın).")
 }
 
 # Excel hücresi en çok 32.767 karakter alır; daha uzun çıktılar kısaltılır ve
@@ -37,14 +39,15 @@ hucreye_sigdir <- function(x, dosya) {
   if (nchar(x) <= EXCEL_SINIR) return(x)
   paste0(substr(x, 1, EXCEL_SINIR), "\n[... METİN KISALTILDI. Tamamı: ", dosya, "]")
 }
-cikti_dosyasi <- function(id, t) file.path(AYAR$cikti_dizini, "api_kayitlari", sprintf("%s_t%d_cikti.txt", id, t))
 
 form <- data.frame(
   odev_id = son$odev_id,
   tekrar = son$tekrar,
-  yonerge = mapply(function(id) hucreye_sigdir(txt_oku(yonerge_dosyasi(id)), yonerge_dosyasi(id)), son$odev_id),
-  yz_ciktisi = mapply(function(id, t) hucreye_sigdir(txt_oku(cikti_dosyasi(id, t)), cikti_dosyasi(id, t)),
-                      son$odev_id, son$tekrar),
+  yonerge = vapply(son$odev_id, function(id) hucreye_sigdir(txt_oku(yonerge_dosyasi(id)), yonerge_dosyasi(id)), "",
+                   USE.NAMES = FALSE),
+  # Çıktı, seçilen çağrının kendi dosyasından okunur (dosya_koku çağrı kaydında).
+  yz_ciktisi = vapply(paste0(son$dosya_koku, "_cikti.txt"),
+                      function(f) hucreye_sigdir(txt_oku(f), f), "", USE.NAMES = FALSE),
   model_reddi = ifelse(is.na(son$ret), "", son$ret),
   kategori = NA_character_,
   gerekce = NA_character_,
@@ -72,7 +75,7 @@ form_yaz <- function(d, yol) {
     sira = seq_along(AYAR$kategoriler), kategori = AYAR$kategoriler,
     tanim = "Kod kitabındaki tanımı buraya yazın"
   ))
-  openxlsx::saveWorkbook(wb, yol)
+  xlsx_kaydet(wb, yol)
   message("Yazıldı: ", yol)
   invisible(TRUE)
 }
@@ -120,7 +123,7 @@ if (!file.exists(nitelik_yolu)) {
   openxlsx::freezePane(wb, "nitelikler", firstRow = TRUE, firstCol = TRUE)
   openxlsx::addWorksheet(wb, "kod_kitabi")
   openxlsx::writeData(wb, "kod_kitabi", data.frame(sutun = names(NITELIKLER), nitelik = unname(NITELIKLER)))
-  openxlsx::saveWorkbook(wb, nitelik_yolu)
+  xlsx_kaydet(wb, nitelik_yolu)
   message("Yazıldı: ", nitelik_yolu)
 }
 message("Kodlama bittiğinde: 05_analiz.R")

@@ -75,11 +75,28 @@ api_anahtari <- function() {
 }
 
 # httr2 isteği -------------------------------------------------------------------
-# Yeniden deneme: OpenAI'nin resmi Python SDK'sı 408, 409, 429 ve 5xx kodlarını
-# yeniden dener; httr2 varsayılan olarak yalnızca 429 ve 503'ü dener. Aynı küme
-# burada açıkça verilir. Retry-After başlığı httr2 tarafından dikkate alınır.
-# Kota/bakiye bitti hatası da 429 ile gelir ("insufficient_quota") ama geçici
-# değildir; yeniden denemek yalnızca zaman kaybettirir.
+openai_istegi <- function(govde, ayar) {
+  uc <- if (ayar$api_ucu == "responses") "responses" else "chat/completions"
+  req <- httr2::request(ayar$taban_url)
+  req <- httr2::req_url_path_append(req, uc)
+  req <- httr2::req_auth_bearer_token(req, api_anahtari())
+  req <- httr2::req_body_json(req, govde, auto_unbox = TRUE)
+  req <- httr2::req_timeout(req, ayar$zaman_asimi_sn)
+  # HTTP hatalarında R hatası fırlatılmaz; yanıt gövdesi kayda geçirilir.
+  httr2::req_error(req, is_error = function(resp) FALSE)
+}
+
+# Yeniden deneme -------------------------------------------------------------------
+# httr2::req_retry() yerine açık bir döngü kullanılır; davranış httr2 sürümüne
+# bağlı kalmasın diye (1.0.0 ile 1.3.0 ağ hatalarında farklı davranıyor).
+# - 408, 409, 429, 500, 502, 503, 504: yeniden denenir (OpenAI'nin resmi Python
+#   SDK'sıyla aynı küme). Retry-After başlığı varsa ona uyulur, yoksa 2, 4, 8...
+#   saniye (en çok 60) beklenir.
+# - Kota/bakiye bitti hatası da 429 ile gelir ("insufficient_quota") ama geçici
+#   değildir; yeniden denenmez.
+# - Zaman aşımı yeniden DENENMEZ: sunucu üretimi bağlantı kopsa da sürdürüp
+#   ücretlendirebilir ve store = false olduğundan sonuç geri alınamaz.
+# - Bağlantı kopması gibi diğer ağ hataları yeniden denenir.
 kota_hatasi_mi <- function(govde_metni) {
   grepl("insufficient_quota|exceeded your current quota", govde_metni %||% "", ignore.case = TRUE)
 }
@@ -93,21 +110,49 @@ gecici_hata_mi <- function(resp) {
   durum %in% c(408, 409, 429, 500, 502, 503, 504)
 }
 
-openai_istegi <- function(govde, ayar) {
-  uc <- if (ayar$api_ucu == "responses") "responses" else "chat/completions"
-  retry_args <- list(max_tries = ayar$deneme_sayisi, is_transient = gecici_hata_mi)
-  # retry_on_failure bağımsız değişkeni httr2 1.1.0 ile geldi; eski sürümde atlanır.
-  if ("retry_on_failure" %in% names(formals(httr2::req_retry))) {
-    retry_args$retry_on_failure <- TRUE
+zaman_asimi_mi <- function(hata) {
+  inherits(hata$parent, "curl_error_operation_timedout") ||
+    grepl("Timeout was reached|timed out", conditionMessage(hata), ignore.case = TRUE)
+}
+
+bekleme_suresi <- function(resp, deneme) {
+  ra <- suppressWarnings(as.numeric(httr2::resp_header(resp, "retry-after-ms"))) / 1000
+  if (length(ra) == 0 || is.na(ra)) ra <- suppressWarnings(as.numeric(httr2::resp_header(resp, "retry-after")))
+  if (length(ra) == 1 && !is.na(ra) && ra >= 0) return(min(ra, 120))
+  min(60, 2^deneme)
+}
+
+istek_gonder <- function(req, deneme_sayisi, bekle = Sys.sleep) {
+  for (deneme in seq_len(deneme_sayisi)) {
+    sonuc <- tryCatch(httr2::req_perform(req), error = function(e) e)
+    son_deneme <- deneme == deneme_sayisi
+    if (inherits(sonuc, "error")) {
+      if (zaman_asimi_mi(sonuc) || son_deneme) return(sonuc)
+      bekle(min(60, 2^deneme))
+      next
+    }
+    if (!gecici_hata_mi(sonuc) || son_deneme) return(sonuc)
+    bekle(bekleme_suresi(sonuc, deneme))
   }
-  req <- httr2::request(ayar$taban_url)
-  req <- httr2::req_url_path_append(req, uc)
-  req <- httr2::req_auth_bearer_token(req, api_anahtari())
-  req <- httr2::req_body_json(req, govde, auto_unbox = TRUE)
-  req <- httr2::req_timeout(req, ayar$zaman_asimi_sn)
-  req <- do.call(httr2::req_retry, c(list(req), retry_args))
-  # HTTP hatalarında R hatası fırlatılmaz; yanıt gövdesi kayda geçirilir.
-  httr2::req_error(req, is_error = function(resp) FALSE)
+}
+
+# Ödeve özgü (tüm çalışmayı durdurmaması gereken) API ret kodları: güvenlik
+# filtresi ya da bu yönergenin aşırı uzunluğu gibi. Diğer 400 hataları (ör.
+# geçersiz parametre, bilinmeyen model) bütün çağrılarda yineleneceği için
+# 03_yz_cagri.R çalışmayı durdurur.
+ODEVE_OZGU_HATA_KODLARI <- c("invalid_prompt", "bio_policy", "misalignment_policy_violation",
+                             "content_policy_violation", "content_filter",
+                             "context_length_exceeded", "string_above_max_length")
+
+# Tüm üretim ayarlarının özeti ---------------------------------------------------
+# Yönerge yerine yer tutucu konarak oluşturulan istek gövdesinin özeti: model,
+# sistem istemi, şablon, akıl yürütme düzeyi, ayrıntılılık, token sınırı,
+# sıcaklık vb. herhangi biri değişirse özet değişir ve bütün ödevler yeniden
+# çağrılır. Böylece farklı ayarlarla üretilmiş çıktılar analizde karışmaz.
+ayar_ozeti <- function(ayar) {
+  sha256(as.character(jsonlite::toJSON(
+    list(api_ucu = ayar$api_ucu, govde = istek_govdesi("{YONERGE}", ayar)),
+    auto_unbox = TRUE, digits = NA)))
 }
 
 # Yanıt ayrıştırma ---------------------------------------------------------------
@@ -161,17 +206,14 @@ yanit_ayristir <- function(j, api_ucu) {
 sha256 <- function(x) digest::digest(enc2utf8(x), algo = "sha256", serialize = FALSE)
 
 # Geçerli çağrılar ---------------------------------------------------------------
-# Bir çağrı, ŞU ANKİ ayarlarla (model, sistem istemi, şablon) ve ŞU ANKİ yönerge
-# metniyle yapılmış ve tamamlanmışsa geçerlidir. Her ödev x tekrar için en son
-# geçerli çağrı döndürülür. Böylece farklı ayarla yapılmış eski ya da başarısız
-# denemeler analize karışmaz.
+# Bir çağrı, ŞU ANKİ ayarlarla (ayar_ozeti) ve ŞU ANKİ yönerge metniyle yapılmış
+# ve tamamlanmışsa geçerlidir. Her ödev x tekrar için en son geçerli çağrı
+# döndürülür. Farklı ayarla yapılmış ya da başarısız denemeler analize karışmaz.
 gecerli_cagrilar <- function(kayit, ayar, yonergeler) {
-  if (is.null(kayit) || nrow(kayit) == 0) return(kayit)
+  if (is.null(kayit) || nrow(kayit) == 0 || is.null(kayit$ayar_sha256)) return(kayit[0, , drop = FALSE])
   yonerge_ozeti <- vapply(yonergeler, sha256, "")
   uygun <- kayit$http_durum %in% 200 & kayit$durum %in% "completed" &
-    kayit$model_istenen %in% ayar$model &
-    kayit$sistem_istemi_sha256 %in% sha256(ayar$sistem_istemi) &
-    kayit$sablon_sha256 %in% sha256(ayar$kullanici_sablonu) &
+    kayit$ayar_sha256 %in% ayar_ozeti(ayar) &
     kayit$odev_id %in% names(yonergeler)
   uygun[uygun] <- kayit$yonerge_sha256[uygun] == yonerge_ozeti[kayit$odev_id[uygun]]
   g <- kayit[uygun, , drop = FALSE]
@@ -179,34 +221,62 @@ gecerli_cagrilar <- function(kayit, ayar, yonergeler) {
   g[!duplicated(g[, c("odev_id", "tekrar")], fromLast = TRUE), , drop = FALSE]
 }
 
+# Çağrı kayıtları -------------------------------------------------------------------
+# Her çağrının kayıt satırı, ham yanıtın yanına <dosya_koku>_kayit.json olarak
+# yazılır; kaydın asıl kaynağı bu dosyalardır. cagri_kaydi.xlsx yalnızca bunların
+# okunabilir bir kopyasıdır; Excel'de açık kalsa bile hiçbir çağrının kaydı kaybolmaz.
+kayit_satiri_yaz <- function(satir, dosya_koku) {
+  jsonlite::write_json(satir, paste0(dosya_koku, "_kayit.json"), dataframe = "rows",
+                       digits = NA, pretty = TRUE)
+  invisible(satir)
+}
+
+kayitlari_oku <- function(kayit_dizini) {
+  dosyalar <- list.files(kayit_dizini, pattern = "_kayit\\.json$", full.names = TRUE)
+  if (length(dosyalar) == 0) return(NULL)
+  k <- rbind_doldur(lapply(dosyalar, function(f) jsonlite::fromJSON(f, simplifyVector = TRUE)))
+  k[order(k$baslangic_utc), , drop = FALSE]
+}
+
 # Tek bir ödev için tek çağrı: isteği ve ham yanıtı diske yazar ---------------
+# Her çağrının dosyaları benzersiz adla (ödev, tekrar, UTC zaman damgası) yazılır;
+# önceki çağrıların kayıtları silinmez. Dosya kökü çağrı kaydına yazılır ve
+# 04_kodlama_formu.R çıktıyı bu kökten okur.
 # Döndürür: çağrı kaydının bir satırı (data.frame)
 odev_cagir <- function(odev_id, tekrar, yonerge, ayar, kayit_dizini) {
   govde <- istek_govdesi(yonerge, ayar)
-  dosya_koku <- file.path(kayit_dizini, sprintf("%s_t%d", odev_id, tekrar))
-  jsonlite::write_json(govde, paste0(dosya_koku, "_istek.json"),
-                       auto_unbox = TRUE, pretty = TRUE)
-
   baslangic <- Sys.time()
-  sonuc <- tryCatch(httr2::req_perform(openai_istegi(govde, ayar)),
-                    error = function(e) e)
+  dosya_koku <- file.path(kayit_dizini, sprintf("%s_t%d_%s", odev_id, tekrar,
+                                                gsub("\\.", "", format(baslangic, "%Y%m%dT%H%M%OS3", tz = "UTC"))))
+  jsonlite::write_json(govde, paste0(dosya_koku, "_istek.json"),
+                       auto_unbox = TRUE, pretty = TRUE, digits = NA)
+
+  sonuc <- istek_gonder(openai_istegi(govde, ayar), ayar$deneme_sayisi)
   bitis <- Sys.time()
 
+  bos_ise_na <- function(x) if (is.null(x)) NA else x
   satir <- data.frame(
     odev_id = odev_id, tekrar = tekrar,
     baslangic_utc = format(baslangic, "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC"),
     sure_sn = round(as.numeric(difftime(bitis, baslangic, units = "secs")), 2),
+    dosya_koku = dosya_koku,
     api_ucu = ayar$api_ucu, model_istenen = ayar$model,
+    akil_yurutme_duzeyi = bos_ise_na(ayar$akil_yurutme_duzeyi),
+    ayrintililik = bos_ise_na(ayar$ayrintililik),
+    azami_cikti_token = bos_ise_na(ayar$azami_cikti_token),
+    sicaklik = bos_ise_na(ayar$sicaklik), top_p = bos_ise_na(ayar$top_p),
+    ayar_sha256 = ayar_ozeti(ayar),
     yonerge_sha256 = sha256(yonerge),
     sistem_istemi_sha256 = sha256(ayar$sistem_istemi),
     sablon_sha256 = sha256(ayar$kullanici_sablonu),
-    http_durum = NA_integer_, hata = NA_character_,
+    http_durum = NA_integer_, hata_kodu = NA_character_, hata = NA_character_,
     stringsAsFactors = FALSE
   )
 
   if (inherits(sonuc, "error")) {
+    satir$durum <- if (zaman_asimi_mi(sonuc)) "zaman_asimi" else "ag_hatasi"
     satir$hata <- conditionMessage(sonuc)
-    return(satir)
+    return(kayit_satiri_yaz(satir, dosya_koku))
   }
   satir$http_durum <- httr2::resp_status(sonuc)
   ham <- httr2::resp_body_string(sonuc)
@@ -214,12 +284,15 @@ odev_cagir <- function(odev_id, tekrar, yonerge, ayar, kayit_dizini) {
 
   if (satir$http_durum != 200) {
     j <- tryCatch(jsonlite::fromJSON(ham, simplifyVector = FALSE), error = function(e) NULL)
+    satir$hata_kodu <- as.character(j$error$code %||% j$error$type %||% NA)
     satir$hata <- j$error$message %||% substr(ham, 1, 500)
-    return(satir)
+    satir$durum <- if (satir$hata_kodu %in% ODEVE_OZGU_HATA_KODLARI) "api_reddi" else "http_hatasi"
+    return(kayit_satiri_yaz(satir, dosya_koku))
   }
   j <- jsonlite::fromJSON(ham, simplifyVector = FALSE)
   a <- yanit_ayristir(j, ayar$api_ucu)
   txt_yaz(a$cikti, paste0(dosya_koku, "_cikti.txt"))
-  cbind(satir, as.data.frame(a[setdiff(names(a), "cikti")], stringsAsFactors = FALSE),
-        cikti_karakter = nchar(a$cikti))
+  satir <- cbind(satir, as.data.frame(a[setdiff(names(a), "cikti")], stringsAsFactors = FALSE),
+                 cikti_karakter = nchar(a$cikti))
+  kayit_satiri_yaz(satir, dosya_koku)
 }

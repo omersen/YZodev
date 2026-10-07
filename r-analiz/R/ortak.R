@@ -20,19 +20,37 @@ gerekli_paketler <- function(paketler) {
   invisible(TRUE)
 }
 
-# CSV: UTF-8 + BOM (Excel Türkçe karakterleri doğru göstersin diye) ----------
-csv_yaz <- function(x, yol) {
-  gecici <- tempfile(fileext = ".csv")
-  utils::write.csv(x, gecici, row.names = FALSE, fileEncoding = "UTF-8", na = "")
-  icerik <- readBin(gecici, "raw", file.size(gecici))
-  writeBin(c(as.raw(c(0xEF, 0xBB, 0xBF)), icerik), yol)
-  unlink(gecici)
+# Excel dosyası yazma -------------------------------------------------------------
+# openxlsx::saveWorkbook(), hedef dosya Excel'de açıkken (Windows yazma kilidi)
+# hata vermeden başarısız olur; burada açık bir hatayla durulur.
+xlsx_kaydet <- function(wb, yol) {
+  ok <- suppressWarnings(openxlsx::saveWorkbook(wb, yol, overwrite = TRUE, returnValue = TRUE))
+  if (!isTRUE(ok)) {
+    stop(yol, " yazılamadı. Dosya Excel'de açık olabilir; kapatıp betiği yeniden çalıştırın.", call. = FALSE)
+  }
   invisible(yol)
 }
 
-csv_oku <- function(yol) {
-  utils::read.csv(yol, fileEncoding = "UTF-8-BOM", stringsAsFactors = FALSE,
-                  check.names = FALSE, na.strings = c("", "NA"))
+# Tek sayfalık tablo. İnsanların açıp bakacağı tablolar CSV yerine xlsx olarak
+# tutulur: Türkçe bölgesel ayarlı Excel, virgülle ayrılmış CSV'yi tek sütunda
+# açar ve kaydederken ayırıcıyı ve karakter kodlamasını değiştirir.
+xlsx_yaz <- function(x, yol, sayfa = "veri") {
+  wb <- openxlsx::createWorkbook()
+  openxlsx::addWorksheet(wb, sayfa)
+  openxlsx::writeData(wb, sayfa, x, withFilter = TRUE)
+  openxlsx::freezePane(wb, sayfa, firstRow = TRUE)
+  xlsx_kaydet(wb, yol)
+}
+
+# Sütunları farklı olabilen data.frame'leri eksik sütunları NA ile doldurarak birleştirir
+rbind_doldur <- function(liste) {
+  liste <- Filter(function(d) !is.null(d) && nrow(d) > 0, liste)
+  if (length(liste) == 0) return(NULL)
+  sutunlar <- unique(unlist(lapply(liste, names)))
+  do.call(rbind, lapply(liste, function(d) {
+    for (s in setdiff(sutunlar, names(d))) d[[s]] <- NA
+    d[, sutunlar, drop = FALSE]
+  }))
 }
 
 # Elle düzenlenen tablolar Excel'de tutulur (Türkçe Excel CSV'yi ";" ile ve

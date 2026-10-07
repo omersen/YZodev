@@ -15,7 +15,7 @@
 source("00_ayarlar.R", encoding = "UTF-8")
 gerekli_paketler(c("xml2", "pdftools", "stringi", "openxlsx"))
 
-envanter <- csv_oku(file.path(AYAR$veri_dizini, "envanter.csv"))
+envanter <- xlsx_oku(file.path(AYAR$veri_dizini, "envanter.xlsx"))
 ham_metin_dizini <- file.path(AYAR$veri_dizini, "metin_ham")
 yonerge_dizini <- file.path(AYAR$veri_dizini, "yonergeler")
 dir.create(ham_metin_dizini, showWarnings = FALSE)
@@ -120,7 +120,7 @@ openxlsx::dataValidation(wb, "kontrol", cols = sutun, rows = 2:(nrow(kontrol) + 
                          type = "list", value = '"evet,hayır"')
 openxlsx::freezePane(wb, "kontrol", firstRow = TRUE, firstCol = TRUE)
 openxlsx::setColWidths(wb, "kontrol", cols = seq_along(kontrol), widths = "auto")
-openxlsx::saveWorkbook(wb, kontrol_yolu, overwrite = TRUE)
+xlsx_kaydet(wb, kontrol_yolu)
 
 message("\nYöntemlere göre dosya sayısı:")
 print(table(kontrol$yontem))

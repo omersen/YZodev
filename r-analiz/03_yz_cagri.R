@@ -4,8 +4,9 @@
 # - Tüm ödevler AYNI sistem istemi, AYNI kullanıcı şablonu ve AYNI parametrelerle
 #   gönderilir; çağrılar arasında bağlam aktarılmaz.
 # - Her çağrının isteği ve ham yanıtı cikti/api_kayitlari/ altına yazılır.
-# - cikti/cagri_kaydi.csv: zaman, model (istenen ve yanıt veren), durum, token
-#   kullanımı, yönerge ve istemlerin SHA-256 özetleri.
+# - Her çağrının kaydı (zaman, istenen ve yanıt veren model, üretim ayarları,
+#   durum, token kullanımı, yönerge/istem/ayar SHA-256 özetleri) ham yanıtın
+#   yanına *_kayit.json olarak yazılır; cikti/cagri_kaydi.xlsx okunabilir kopyadır.
 # - Kesintiye uğrarsa betiği yeniden çalıştırın: başarıyla tamamlanmış çağrılar
 #   (aynı yönerge, istem ve model için) tekrarlanmaz.
 # =============================================================================
@@ -16,7 +17,13 @@ api_anahtari()   # anahtar yoksa burada durur
 
 kayit_dizini <- file.path(AYAR$cikti_dizini, "api_kayitlari")
 dir.create(kayit_dizini, showWarnings = FALSE, recursive = TRUE)
-kayit_yolu <- file.path(AYAR$cikti_dizini, "cagri_kaydi.csv")
+kayit_yolu <- file.path(AYAR$cikti_dizini, "cagri_kaydi.xlsx")
+kopya_yaz <- function(kayit) {
+  tryCatch(xlsx_yaz(kayit, kayit_yolu), error = function(e) {
+    message("Not: ", kayit_yolu, " güncellenemedi (Excel'de açık olabilir). Kayıtlar ",
+            "api_kayitlari/*_kayit.json dosyalarında güvende; kopya sonraki çağrıda yeniden yazılır.")
+  })
+}
 
 # Gönderilecek yönergeler -------------------------------------------------------------
 kontrol <- xlsx_oku(file.path(AYAR$veri_dizini, "kontrol_listesi.xlsx"))
@@ -43,7 +50,7 @@ set.seed(AYAR$cagri_sirasi_tohumu)
 isler <- isler[sample(nrow(isler)), ]
 
 # Daha önce başarıyla tamamlananlar atlanır ------------------------------------------
-kayit <- if (file.exists(kayit_yolu)) csv_oku(kayit_yolu) else NULL
+kayit <- kayitlari_oku(kayit_dizini)
 gecerli <- gecerli_cagrilar(kayit, AYAR, yonergeler)
 tamam <- paste(gecerli$odev_id, gecerli$tekrar)
 yapilacak <- isler[!paste(isler$odev_id, isler$tekrar) %in% tamam, ]
@@ -81,18 +88,15 @@ if (nrow(yapilacak) > 0) {
 
   # Çağrılar ---------------------------------------------------------------------------
   # 400/401/403/404 (istek yapısı ya da yetki) ve kota hatası: tüm çağrılar aynı
-  # hatayı vereceği için durulur. Diğer hatalar kaydedilir, sonraki ödeve geçilir.
+  # hatayı vereceği için durulur. Ödeve özgü retler (ör. güvenlik filtresi,
+  # "api_reddi") ve diğer hatalar kaydedilir, sonraki ödeve geçilir.
   for (k in seq_len(nrow(yapilacak))) {
     id <- yapilacak$odev_id[k]
     t <- yapilacak$tekrar[k]
     satir <- odev_cagir(id, t, yonergeler[[id]], AYAR, kayit_dizini)
 
-    kayit <- if (is.null(kayit)) satir else {
-      eksik1 <- setdiff(names(satir), names(kayit)); for (s in eksik1) kayit[[s]] <- NA
-      eksik2 <- setdiff(names(kayit), names(satir)); for (s in eksik2) satir[[s]] <- NA
-      rbind(kayit, satir[, names(kayit)])
-    }
-    csv_yaz(kayit, kayit_yolu)   # her çağrıdan sonra yazılır (kesintiye dayanıklı)
+    kayit <- rbind_doldur(list(kayit, satir))
+    kopya_yaz(kayit)
 
     message(sprintf("[%d/%d] %s t%d -> HTTP %s, durum: %s%s (%.0f sn)",
                     k, nrow(yapilacak), id, t, satir$http_durum,
@@ -103,8 +107,8 @@ if (nrow(yapilacak) > 0) {
       stop("API kotası/bakiyesi yetersiz (HTTP 429, insufficient_quota). Hesabınıza bakiye ",
            "ekleyip betiği yeniden çalıştırın; tamamlanan çağrılar tekrarlanmaz.")
     }
-    if (isTRUE(satir$http_durum %in% c(400, 401, 403, 404))) {
-      stop("API isteği reddetti (HTTP ", satir$http_durum, "): ", satir$hata,
+    if (isTRUE(satir$http_durum %in% c(400, 401, 403, 404)) && !identical(satir$durum, "api_reddi")) {
+      stop("API isteği reddetti (HTTP ", satir$http_durum, ", kod: ", satir$hata_kodu, "): ", satir$hata,
            "\nAyarları (model adı, parametreler, anahtar) düzeltip yeniden çalıştırın.")
     }
   }
@@ -113,9 +117,7 @@ if (nrow(yapilacak) > 0) {
 
 # Özet ---------------------------------------------------------------------------------
 # Şu anki ayarlarla yapılan en son çağrıların durumu
-son <- kayit[kayit$model_istenen %in% AYAR$model &
-               kayit$sistem_istemi_sha256 %in% sha256(AYAR$sistem_istemi) &
-               kayit$sablon_sha256 %in% sha256(AYAR$kullanici_sablonu), ]
+son <- kayit[kayit$ayar_sha256 %in% ayar_ozeti(AYAR) & kayit$odev_id %in% names(yonergeler), ]
 son <- son[order(son$baslangic_utc), ]
 son <- son[!duplicated(son[, c("odev_id", "tekrar")], fromLast = TRUE), ]
 message("\nŞu anki ayarlarla son çağrıların durumu:")
@@ -123,10 +125,20 @@ print(table(durum = son$durum, useNA = "ifany"))
 kesik <- son$odev_id[son$durum %in% "incomplete"]
 if (length(kesik) > 0) {
   message("UYARI: ", length(kesik), " çağrı tamamlanmadı (", paste(unique(stats::na.omit(son$eksik_nedeni)), collapse = ", "),
-          "). Bunlar 'YZ tamamlayamadı' olarak KODLANMAMALIDIR; teknik kesintidir. ",
-          "Neden max_output_tokens ise azami_cikti_token'ı artırıp standartlaştırma için ",
-          "TÜM ödevleri yeniden çalıştırmanız önerilir.")
+          "): ", paste(kesik, collapse = ", "), ". Bunlar 'YZ tamamlayamadı' olarak KODLANMAMALIDIR; teknik kesintidir. ",
+          "Neden max_output_tokens ise azami_cikti_token'ı artırın; ayar değiştiği için betik ",
+          "TÜM ödevleri yeniden çağırır (standartlaştırma korunur).")
 }
-reddedilen <- son$odev_id[nzchar(son$ret %||% "") & !is.na(son$ret)]
-if (length(reddedilen) > 0) message("Modelin reddettiği çağrılar: ", paste(reddedilen, collapse = ", "))
+api_reddi <- son[son$durum %in% "api_reddi", ]
+if (nrow(api_reddi) > 0) {
+  message("API'nin içerik/uzunluk nedeniyle reddettiği ödevler (kodlama formuna alınmaz; ",
+          "nasıl raporlanacağına siz karar verin): ",
+          paste0(api_reddi$odev_id, " (", api_reddi$hata_kodu, ")", collapse = ", "))
+}
+diger <- son$odev_id[son$durum %in% c("zaman_asimi", "ag_hatasi", "http_hatasi")]
+if (length(diger) > 0) message("Hata nedeniyle tamamlanamayan çağrılar (betiği yeniden çalıştırınca yeniden denenir): ",
+                               paste(diger, collapse = ", "))
+reddedilen <- son$odev_id[!is.na(son$ret) & nzchar(son$ret %||% "")]
+if (length(reddedilen) > 0) message("Modelin yanıtında reddettiği çağrılar (formda 'model_reddi' sütunu): ",
+                                    paste(reddedilen, collapse = ", "))
 message("Sonraki adım: 04_kodlama_formu.R")

@@ -23,10 +23,16 @@ denetle <- function(kosul, aciklama) {
   if (isTRUE(kosul)) cat("  GEÇTİ :", aciklama, "\n") else { cat("  KALDI :", aciklama, "\n"); hatalar <<- hatalar + 1 }
 }
 rscript <- file.path(R.home("bin"), "Rscript")
+# Ortam değişkenleri system2(env =) ile değil, bu süreçte ayarlanarak aktarılır:
+# Windows'ta system2(env =) değişkenleri komut satırına yazar ve Rscript bunları
+# betik adı sanar.
 adim <- function(betik, dizin, beklenen_cikis = 0) {
-  cikti <- suppressWarnings(system2(rscript, c("--vanilla", betik), stdout = TRUE, stderr = TRUE,
-                                    env = c(paste0("R_LIBS=", paste(.libPaths(), collapse = .Platform$path.sep)),
-                                            "OPENAI_API_KEY=test-anahtari")))
+  eski <- Sys.getenv(c("R_LIBS", "OPENAI_API_KEY"), unset = NA)
+  Sys.setenv(R_LIBS = paste(.libPaths(), collapse = .Platform$path.sep), OPENAI_API_KEY = "test-anahtari")
+  on.exit({
+    for (ad in names(eski)) if (is.na(eski[[ad]])) Sys.unsetenv(ad) else do.call(Sys.setenv, as.list(eski[ad]))
+  }, add = TRUE)
+  cikti <- suppressWarnings(system2(rscript, c("--vanilla", betik), stdout = TRUE, stderr = TRUE))
   durum <- attr(cikti, "status") %||% 0
   if (durum != beklenen_cikis) { cat(cikti, sep = "\n") }
   list(durum = durum, cikti = cikti)
@@ -42,9 +48,9 @@ on.exit(setwd(eski_wd), add = TRUE)
 dir.create("veri/ham", recursive = TRUE)
 
 # --- Yapay ödev dosyaları ------------------------------------------------------------
-# 144 analiz edilecek ödev + 1 kesik yanıt (TESTKESIK) + 1 taranmış PDF = 146
+# 144 analiz edilecek ödev + kesik yanıt + API reddi + zaman aşımı + 1 taranmış PDF = 148
 cat("\n[1] Yapay ödev dosyaları oluşturuluyor\n")
-isaretler <- c(rep("", 140), "TEST429", "TEST500", "TESTRET", "TESTFAZ", "TESTKESIK")
+isaretler <- c(rep("", 140), "TEST429", "TEST500", "TESTRET", "TESTFAZ", "TESTKESIK", "TESTFILTRE", "TESTYAVAS")
 docx_yaz <- function(yol, metin) {
   d <- officer::read_docx()
   d <- officer::body_add_par(d, "Ödev Yönergesi", style = "heading 1")
@@ -65,18 +71,18 @@ pdf_yaz <- function(yol, metin) {
   graphics::text(0, 0.5, metin, adj = 0, cex = 0.7)
   grDevices::dev.off()
 }
-envanter <- data.frame(odev_id = sprintf("O%03d", 1:146), drive_id = sprintf("drv%03d", 1:146),
+envanter <- data.frame(odev_id = sprintf("O%03d", 1:148), drive_id = sprintf("drv%03d", 1:148),
                        stringsAsFactors = FALSE)
-envanter$uzanti <- ifelse(seq_len(146) %% 3 == 0, "pdf", "docx")
-envanter$uzanti[146] <- "pdf"
-for (i in 1:145) {
+envanter$uzanti <- ifelse(seq_len(148) %% 3 == 0, "pdf", "docx")
+envanter$uzanti[148] <- "pdf"
+for (i in 1:147) {
   metin <- sprintf("Öğrenciler mahallelerindeki su tüketimini ölçecek ve sonucu yorumlayacak. Ödev %d. %s",
                    i, isaretler[i])
   yol <- file.path("veri/ham", paste0(envanter$odev_id[i], ".", envanter$uzanti[i]))
   if (envanter$uzanti[i] == "pdf") pdf_yaz(yol, metin) else docx_yaz(yol, metin)
 }
-# 146: metin katmanı olmayan (taranmış gibi) PDF
-grDevices::pdf("veri/ham/O146.pdf", width = 8, height = 4)
+# 148: metin katmanı olmayan (taranmış gibi) PDF
+grDevices::pdf("veri/ham/O148.pdf", width = 8, height = 4)
 graphics::plot.new(); graphics::rasterImage(matrix(stats::runif(400), 20), 0, 0, 1, 1)
 grDevices::dev.off()
 envanter$mime_turu <- ifelse(envanter$uzanti == "pdf", "application/pdf",
@@ -84,13 +90,13 @@ envanter$mime_turu <- ifelse(envanter$uzanti == "pdf", "application/pdf",
 envanter$yerel_yol <- file.path("veri/ham", paste0(envanter$odev_id, ".", envanter$uzanti))
 envanter$ayni_icerik <- ""
 envanter$indirme <- "indirildi"
-csv_yaz(envanter, "veri/envanter.csv")
+xlsx_yaz(envanter, "veri/envanter.xlsx")
 
 # --- 02: metin çıkarma ----------------------------------------------------------------
 cat("\n[2] 02_metin_cikar.R\n")
 r <- adim("02_metin_cikar.R", proje)
 denetle(r$durum == 0, "02 hatasız tamamlandı")
-denetle(length(list.files("veri/yonergeler")) == 146, "146 yönerge dosyası yazıldı")
+denetle(length(list.files("veri/yonergeler")) == 148, "148 yönerge dosyası yazıldı")
 y1 <- txt_oku("veri/yonergeler/O001.txt")
 denetle(grepl("Öğrenciler mahallelerindeki su tüketimini", y1), "docx metni Türkçe karakterleriyle okundu")
 denetle(grepl("Adım | Görev", y1, fixed = TRUE) && grepl("1 | Veri topla", y1, fixed = TRUE),
@@ -98,13 +104,13 @@ denetle(grepl("Adım | Görev", y1, fixed = TRUE) && grepl("1 | Veri topla", y1,
 y3 <- txt_oku("veri/yonergeler/O003.txt")
 denetle(grepl("su t.ketimini", y3), "PDF metni okundu")
 kontrol <- xlsx_oku("veri/kontrol_listesi.xlsx")
-denetle(isTRUE(kontrol$taranmis_olabilir[kontrol$odev_id == "O146"]), "metin katmanı olmayan PDF işaretlendi")
+denetle(isTRUE(kontrol$taranmis_olabilir[kontrol$odev_id == "O148"]), "metin katmanı olmayan PDF işaretlendi")
 denetle(is.na(kontrol$dikkat[kontrol$odev_id == "O001"]) || !grepl("yinelenen|okunamadı", kontrol$dikkat[kontrol$odev_id == "O001"]),
         "sorunsuz dosya yanlışlıkla işaretlenmedi")
 
 # Araştırmacının elle düzeltmesi korunuyor mu?
 txt_yaz("ELLE DÜZELTİLMİŞ YÖNERGE O002", "veri/yonergeler/O002.txt")
-kontrol$kontrol_edildi <- ifelse(kontrol$odev_id == "O146", "hayır", "evet")
+kontrol$kontrol_edildi <- ifelse(kontrol$odev_id == "O148", "hayır", "evet")
 kontrol$not[kontrol$odev_id == "O005"] <- "test notu"
 openxlsx::write.xlsx(kontrol, "veri/kontrol_listesi.xlsx", overwrite = TRUE)
 r <- adim("02_metin_cikar.R", proje)
@@ -115,42 +121,54 @@ denetle(k2$not[k2$odev_id == "O005"] == "test notu" && k2$kontrol_edildi[k2$odev
 
 # --- 03: API çağrıları (sahte sunucu) --------------------------------------------------
 cat("\n[3] 03_yz_cagri.R (sahte sunucu)\n")
-sunucu <- webfakes::new_app_process(sahte_openai_uygulamasi())
+sayac <- tempfile("sayac_")
+sunucu <- webfakes::new_app_process(sahte_openai_uygulamasi(sayac))
 taban <- sub("/$", "", sunucu$url("/v1"))
 writeLines(c(sprintf('AYAR$taban_url <- "%s"', taban), "AYAR$deneme_sayisi <- 3",
-             "AYAR$zaman_asimi_sn <- 30"), "ayarlar_yerel.R")
+             "AYAR$zaman_asimi_sn <- 3"), "ayarlar_yerel.R")
 r <- adim("03_yz_cagri.R", proje)
 denetle(r$durum == 0, "03 hatasız tamamlandı")
-kayit <- csv_oku("cikti/cagri_kaydi.csv")
-denetle(nrow(kayit) == 145, "145 çağrı yapıldı (kontrol edilmemiş 1 ödev gönderilmedi)")
+kayit <- kayitlari_oku("cikti/api_kayitlari")
+denetle(nrow(kayit) == 147, "147 çağrı yapıldı (kontrol edilmemiş 1 ödev gönderilmedi; 400 reddi çalışmayı durdurmadı)")
+denetle(kayit$durum[kayit$odev_id == "O146"] == "api_reddi" && kayit$hata_kodu[kayit$odev_id == "O146"] == "invalid_prompt",
+        "ödeve özgü 400 (invalid_prompt) 'api_reddi' olarak kaydedildi")
+denetle(kayit$durum[kayit$odev_id == "O147"] == "zaman_asimi", "zaman aşımı kaydedildi")
+denetle(length(list.files(sayac, "^yavas_")) == 1, "zaman aşımı yeniden denenmedi (ücretli üretim tekrarlanmadı)")
+denetle(!any(duplicated(kayit$dosya_koku)) && all(file.exists(paste0(kayit$dosya_koku[kayit$http_durum %in% 200], "_yanit.json"))),
+        "her çağrının benzersiz dosyası var")
+denetle(file.exists("cikti/cagri_kaydi.xlsx") && nrow(xlsx_oku("cikti/cagri_kaydi.xlsx")) == 147,
+        "okunabilir çağrı kaydı kopyası (xlsx) yazıldı")
 denetle(sum(kayit$durum == "completed", na.rm = TRUE) == 144, "144 çağrı 'completed'")
 denetle(kayit$durum[kayit$odev_id == "O145"] == "incomplete" &&
           kayit$eksik_nedeni[kayit$odev_id == "O145"] == "max_output_tokens", "kesik yanıt ayırt edildi")
 denetle(kayit$http_durum[kayit$odev_id == "O141"] == 200, "429 sonrası yeniden deneme başarılı")
 denetle(kayit$http_durum[kayit$odev_id == "O142"] == 200, "500 sonrası yeniden deneme başarılı")
 denetle(grepl("yardımcı olamam", kayit$ret[kayit$odev_id == "O143"]), "model reddi kaydedildi")
-denetle(txt_oku("cikti/api_kayitlari/O144_t1_cikti.txt") == "NİHAİ ÖDEV ÇIKTISI",
+cikti_yolu <- function(id) paste0(kayit$dosya_koku[kayit$odev_id == id][1], "_cikti.txt")
+denetle(txt_oku(cikti_yolu("O144")) == "NİHAİ ÖDEV ÇIKTISI",
         "yalnızca final_answer aşaması çıktı olarak alındı")
-denetle(grepl("ğüşıöç", txt_oku("cikti/api_kayitlari/O001_t1_cikti.txt")), "çıktı UTF-8 olarak kaydedildi")
-istek <- jsonlite::fromJSON("cikti/api_kayitlari/O001_t1_istek.json")
+denetle(grepl("ğüşıöç", txt_oku(cikti_yolu("O001"))), "çıktı UTF-8 olarak kaydedildi")
+istek_yolu <- function(id) paste0(kayit$dosya_koku[kayit$odev_id == id][1], "_istek.json")
+istek <- jsonlite::fromJSON(istek_yolu("O001"))
 denetle(identical(istek$store, FALSE) && is.null(istek$temperature) && istek$reasoning$effort == "medium" &&
           grepl("{YONERGE}", istek$input, fixed = TRUE) == FALSE, "istek gövdesi doğru (store=false, temperature yok)")
-denetle(grepl("ELLE DÜZELTİLMİŞ", jsonlite::fromJSON("cikti/api_kayitlari/O002_t1_istek.json")$input),
+denetle(grepl("ELLE DÜZELTİLMİŞ", jsonlite::fromJSON(istek_yolu("O002"))$input),
         "düzeltilmiş yönerge gönderildi")
-denetle(all(kayit$model_yanit[kayit$http_durum == 200] == "gpt-5.6-sol-2026-07-09"),
+denetle(all(kayit$model_yanit[kayit$http_durum %in% 200] == "gpt-5.6-sol-2026-07-09"),
         "yanıtı veren model sürümü kaydedildi")
-denetle(length(unique(kayit$sistem_istemi_sha256)) == 1, "tüm çağrılarda aynı sistem istemi")
+denetle(length(unique(kayit$sistem_istemi_sha256)) == 1 && length(unique(kayit$ayar_sha256)) == 1,
+        "tüm çağrılarda aynı sistem istemi ve aynı üretim ayarları")
 
-# Yeniden çalıştırma: yalnızca tamamlanmamış çağrı tekrarlanmalı
+# Yeniden çalıştırma: yalnızca tamamlanmamış 3 çağrı (kesik, ret, zaman aşımı) tekrarlanmalı
 r <- adim("03_yz_cagri.R", proje)
-denetle(any(grepl("144 çağrı önceden tamamlanmış; 1 çağrı yapılacak", r$cikti)),
+denetle(any(grepl("144 çağrı önceden tamamlanmış; 3 çağrı yapılacak", r$cikti)),
         "yeniden çalıştırmada tamamlananlar atlandı")
 
 # Geçersiz model: ilk 400 hatasında durmalı
 writeLines(c(sprintf('AYAR$taban_url <- "%s"', taban), 'AYAR$model <- "gecersiz-model"'), "ayarlar_yerel.R")
 r <- adim("03_yz_cagri.R", proje, beklenen_cikis = 1)
 denetle(r$durum != 0 && any(grepl("does not exist", r$cikti)), "400 hatasında betik açık mesajla durdu")
-denetle(nrow(csv_oku("cikti/cagri_kaydi.csv")) == 147, "400 hatasında yalnızca bir çağrı denendi")
+denetle(nrow(kayitlari_oku("cikti/api_kayitlari")) == 151, "400 hatasında yalnızca bir çağrı denendi")
 # Kota bitti (429 insufficient_quota): yeniden denemeden hemen durmalı
 writeLines(c(sprintf('AYAR$taban_url <- "%s"', taban), 'AYAR$model <- "kota-yok"'), "ayarlar_yerel.R")
 bas <- Sys.time()
@@ -158,7 +176,7 @@ r <- adim("03_yz_cagri.R", proje, beklenen_cikis = 1)
 denetle(r$durum != 0 && any(grepl("insufficient_quota", r$cikti)) &&
           as.numeric(difftime(Sys.time(), bas, units = "secs")) < 20,
         "kota hatasında yeniden denemeden hemen durdu")
-denetle(nrow(csv_oku("cikti/cagri_kaydi.csv")) == 148, "kota hatasında yalnızca bir çağrı denendi")
+denetle(nrow(kayitlari_oku("cikti/api_kayitlari")) == 152, "kota hatasında yalnızca bir çağrı denendi")
 writeLines(sprintf('AYAR$taban_url <- "%s"', taban), "ayarlar_yerel.R")
 sunucu$stop()
 
@@ -168,7 +186,8 @@ r <- adim("04_kodlama_formu.R", proje)
 denetle(r$durum == 0, "04 hatasız tamamlandı")
 f1 <- xlsx_oku("cikti/kodlama/kodlayici1_tamamlanabilirlik.xlsx")
 f2 <- xlsx_oku("cikti/kodlama/kodlayici2_tamamlanabilirlik.xlsx")
-denetle(nrow(f1) == 144, "birinci kodlayıcı formunda 144 ödev (kesik yanıt dışarıda)")
+denetle(nrow(f1) == 144, "birinci kodlayıcı formunda 144 ödev (kesik, ret, zaman aşımı dışarıda)")
+denetle(f1$yz_ciktisi[f1$odev_id == "O144"] == "NİHAİ ÖDEV ÇIKTISI", "form çıktıyı seçilen çağrının dosyasından aldı")
 denetle(nrow(f2) == 36 && all(is.na(f2$kategori)), "ikinci kodlayıcı formunda 36 ödev, kodlar boş (körleme)")
 
 # Bildirideki dağılımla yapay kodlama

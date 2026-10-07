@@ -2,17 +2,17 @@
 # 01_drive_indir.R : Google Drive klasöründeki ödev dosyalarını indirir
 # -----------------------------------------------------------------------------
 # Çıktılar (veri/ altında, GitHub'a gönderilmez):
-#   kimlik_eslestirme.csv : Drive dosyası <-> anonim ödev kimliği (O001, O002...)
+#   kimlik_eslestirme.xlsx: Drive dosyası <-> anonim ödev kimliği (O001, O002...)
 #                           Özgün dosya adları (öğrenci adı içerebilir) yalnızca
 #                           bu dosyada tutulur.
-#   envanter.csv          : dosya türü, boyut, md5, indirme durumu
+#   envanter.xlsx         : dosya türü, boyut, md5, indirme durumu
 #   ham/O001.docx ...     : indirilen dosyalar (anonim adlarla)
 # Betik yeniden çalıştırılabilir: Drive'da değişmemiş dosyalar yeniden indirilmez,
 # klasöre sonradan eklenen dosyalar yeni kimlik alır, eski kimlikler değişmez.
 # =============================================================================
 
 source("00_ayarlar.R", encoding = "UTF-8")
-gerekli_paketler(c("googledrive", "gargle"))
+gerekli_paketler(c("googledrive", "gargle", "openxlsx"))
 
 if (grepl("^BURAYA_", AYAR$drive_klasor)) stop("00_ayarlar.R içinde drive_klasor ayarını doldurun.")
 
@@ -22,9 +22,9 @@ if (is.null(envanter) || nrow(envanter) == 0) stop("Klasörde dosya bulunamadı.
 envanter <- envanter[order(envanter$alt_klasor, envanter$ad), ]
 
 # Kalıcı anonim kimlikler -----------------------------------------------------------
-eslestirme_yolu <- file.path(AYAR$veri_dizini, "kimlik_eslestirme.csv")
+eslestirme_yolu <- file.path(AYAR$veri_dizini, "kimlik_eslestirme.xlsx")
 eslestirme <- if (file.exists(eslestirme_yolu)) {
-  csv_oku(eslestirme_yolu)
+  xlsx_oku(eslestirme_yolu)
 } else {
   data.frame(odev_id = character(0), drive_id = character(0), ad = character(0),
              alt_klasor = character(0), stringsAsFactors = FALSE)
@@ -37,14 +37,14 @@ if (nrow(yeni) > 0) {
     drive_id = yeni$drive_id, ad = yeni$ad, alt_klasor = yeni$alt_klasor,
     stringsAsFactors = FALSE
   ))
-  csv_yaz(eslestirme, eslestirme_yolu)
+  xlsx_yaz(eslestirme, eslestirme_yolu)
 }
 envanter <- merge(eslestirme[, c("odev_id", "drive_id")], envanter, by = "drive_id")
 envanter <- envanter[order(envanter$odev_id), ]
 
 # Klasörden silinmiş dosyalar bildirilir (kimlikleri korunur) ---------------------
 kayip <- setdiff(eslestirme$drive_id, envanter$drive_id)
-if (length(kayip) > 0) message(length(kayip), " dosya artık Drive klasöründe yok (kimlik_eslestirme.csv'de kaldı).")
+if (length(kayip) > 0) message(length(kayip), " dosya artık Drive klasöründe yok (kimlik_eslestirme.xlsx'te kaldı).")
 
 # Aynı içerikli dosyalar (ör. aynı ödevin iki kez yüklenmesi) --------------------
 envanter$uzanti <- dosya_uzantisi(envanter$ad, envanter$mime_turu)
@@ -55,8 +55,8 @@ envanter$ayni_icerik <- ifelse(envanter$md5 %in% yinelenen_md5,
 # İndirme ---------------------------------------------------------------------------
 ham_dizin <- file.path(AYAR$veri_dizini, "ham")
 dir.create(ham_dizin, showWarnings = FALSE)
-onceki <- file.path(AYAR$veri_dizini, "envanter.csv")
-onceki <- if (file.exists(onceki)) csv_oku(onceki) else NULL
+onceki <- file.path(AYAR$veri_dizini, "envanter.xlsx")
+onceki <- if (file.exists(onceki)) xlsx_oku(onceki) else NULL
 
 envanter$yerel_yol <- NA_character_
 envanter$indirme <- NA_character_
@@ -74,7 +74,7 @@ for (i in seq_len(nrow(envanter))) {
   envanter$indirme[i] <- if (inherits(sonuc, "error")) paste("HATA:", conditionMessage(sonuc)) else "indirildi"
 }
 
-csv_yaz(envanter[, setdiff(names(envanter), "ad")], file.path(AYAR$veri_dizini, "envanter.csv"))
+xlsx_yaz(envanter[, setdiff(names(envanter), "ad")], file.path(AYAR$veri_dizini, "envanter.xlsx"))
 
 message("\nDosya türleri:")
 print(table(uzanti = envanter$uzanti))
@@ -82,5 +82,5 @@ if (any(nzchar(envanter$ayni_icerik))) {
   message("Aynı içerikli dosyalar var (ayni_icerik sütununa bakın); hangisinin analize girdiğine siz karar verin.")
 }
 hatali <- grepl("^HATA", envanter$indirme)
-if (any(hatali)) message(sum(hatali), " dosya indirilemedi; envanter.csv'deki 'indirme' sütununa bakın.")
+if (any(hatali)) message(sum(hatali), " dosya indirilemedi; envanter.xlsx'teki 'indirme' sütununa bakın.")
 message("Tamam. Sonraki adım: 02_metin_cikar.R")

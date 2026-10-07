@@ -118,7 +118,7 @@ if (!is.null(nitelikler)) {
   openxlsx::addWorksheet(wb, "nitelikler"); openxlsx::writeData(wb, "nitelikler", nitelikler)
   openxlsx::addWorksheet(wb, "nitelik_x_tamamlanma"); openxlsx::writeData(wb, "nitelik_x_tamamlanma", capraz)
 }
-openxlsx::saveWorkbook(wb, file.path(analiz_dizini, "tablolar.xlsx"), overwrite = TRUE)
+xlsx_kaydet(wb, file.path(analiz_dizini, "tablolar.xlsx"))
 
 cubuk_grafik(dagilim, "kategori",
              sprintf("Ödevlerin ÜYZ ile tamamlanabilirliği (n = %d)", N),

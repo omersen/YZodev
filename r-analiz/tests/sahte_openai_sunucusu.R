@@ -6,6 +6,9 @@
 #   TESTKESIK : status = "incomplete", reason = "max_output_tokens"
 #   TESTRET   : modelin reddi (content type = "refusal")
 #   TESTFAZ   : önce "commentary", sonra "final_answer" aşamalı iki mesaj
+#   TESTFILTRE: 400 invalid_prompt (ödeve özgü güvenlik filtresi)
+#   TESTYAVAS : yanıtı 5 sn geciktirir (zaman aşımı denemesi); istek sayısı
+#               sayac_dizini/yavas_* dosyalarıyla sayılır
 #   model = "gecersiz-model" : 400 hatası
 #   model = "kota-yok"       : 429 insufficient_quota (kalıcı)
 # =============================================================================
@@ -52,12 +55,21 @@ sahte_openai_uygulamasi <- function(sayac_dizini = tempfile("sayac_")) {
     if (identical(b$model, "gecersiz-model")) {
       return(res$set_status(400)$send_json(
         list(error = list(message = "The requested model 'gecersiz-model' does not exist.",
-                          type = "invalid_request_error")), auto_unbox = TRUE))
+                          type = "invalid_request_error", code = "model_not_found")), auto_unbox = TRUE))
     }
     if (identical(b$model, "kota-yok")) {
       return(res$set_status(429)$send_json(
         list(error = list(message = "You exceeded your current quota, please check your plan and billing details.",
                           type = "insufficient_quota", code = "insufficient_quota")), auto_unbox = TRUE))
+    }
+    if (grepl("TESTFILTRE", girdi)) {
+      return(res$set_status(400)$send_json(
+        list(error = list(message = "Invalid prompt: your prompt was flagged as potentially violating our usage policy.",
+                          type = "invalid_request_error", code = "invalid_prompt")), auto_unbox = TRUE))
+    }
+    if (grepl("TESTYAVAS", girdi)) {
+      file.create(file.path(app$locals$sayac_dizini, paste0("yavas_", length(list.files(app$locals$sayac_dizini, "^yavas_")) + 1)))
+      Sys.sleep(5)
     }
     anahtar <- substr(digest::digest(girdi), 1, 12)
     if (grepl("TEST429", girdi) && ilk_kez_mi(app, paste0("429_", anahtar))) {
