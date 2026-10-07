@@ -64,9 +64,12 @@ for (i in seq_len(nrow(envanter))) {
   uz <- if (envanter$uzanti[i] == "gdoc") "docx" else envanter$uzanti[i]
   hedef <- file.path(ham_dizin, paste0(envanter$odev_id[i], if (nzchar(uz)) paste0(".", uz)))
   envanter$yerel_yol[i] <- hedef
+  # Yalnızca önceki çalıştırmada BAŞARIYLA indirilmiş ve Drive'da değişmemiş
+  # dosyalar atlanır; önceki indirme hatalıysa yeniden denenir.
   ayni <- !is.null(onceki) && file.exists(hedef) &&
     any(onceki$drive_id == envanter$drive_id[i] &
-          onceki$degistirilme == envanter$degistirilme[i], na.rm = TRUE)
+          onceki$degistirilme == envanter$degistirilme[i] &
+          onceki$indirme %in% c("indirildi", "onceden-indirildi"), na.rm = TRUE)
   if (ayni) { envanter$indirme[i] <- "onceden-indirildi"; next }
   message(sprintf("[%d/%d] %s indiriliyor", i, nrow(envanter), envanter$odev_id[i]))
   sonuc <- tryCatch(drive_dosya_indir(envanter$drive_id[i], hedef, envanter$mime_turu[i]),
