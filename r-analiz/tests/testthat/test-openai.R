@@ -116,3 +116,23 @@ test_that("Excel dosyası yazılamazsa sessizce geçmez, açık hata verir", {
   skip_if_not_installed("openxlsx")
   expect_error(xlsx_yaz(data.frame(a = 1), file.path(tempfile(), "yok", "x.xlsx")), "yazılamadı")
 })
+
+test_that("boş gövdeli 502 ve bozuk JSON çalışmayı durdurmaz, kayda geçer", {
+  withr::local_envvar(OPENAI_API_KEY = "test")
+  d <- tempfile("kayit_"); dir.create(d)
+  a <- modifyList(ayar, list(taban_url = "https://ornek.test/v1", deneme_sayisi = 1, zaman_asimi_sn = 5))
+  httr2::local_mocked_responses(function(req) httr2::response(502))
+  s <- odev_cagir("O1", 1, "Yönerge", a, d)
+  expect_equal(s$durum, "http_hatasi"); expect_equal(s$http_durum, 502); expect_equal(s$hata, "(boş yanıt)")
+  httr2::local_mocked_responses(function(req) httr2::response(200, headers = list(`Content-Type` = "application/json"),
+                                                               body = charToRaw("{bozuk")))
+  s2 <- odev_cagir("O2", 1, "Yönerge", a, d)
+  expect_equal(s2$durum, "gecersiz_yanit")
+  expect_equal(nrow(kayitlari_oku(d)), 2)
+})
+
+test_that("hata metinlerinden ANSI renk kodları ve XML'de geçersiz karakterler atılır", {
+  x <- "Failed.\n\033[1mCaused by\033[22m \033[33m!\033[39m Timeout\x0c ğüş"
+  expect_equal(xml_guvenli(x), "Failed.\nCaused by ! Timeout ğüş")
+  expect_equal(xml_guvenli(3), 3)
+})

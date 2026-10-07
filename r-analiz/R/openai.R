@@ -275,21 +275,26 @@ odev_cagir <- function(odev_id, tekrar, yonerge, ayar, kayit_dizini) {
 
   if (inherits(sonuc, "error")) {
     satir$durum <- if (zaman_asimi_mi(sonuc)) "zaman_asimi" else "ag_hatasi"
-    satir$hata <- conditionMessage(sonuc)
+    satir$hata <- xml_guvenli(conditionMessage(sonuc))
     return(kayit_satiri_yaz(satir, dosya_koku))
   }
   satir$http_durum <- httr2::resp_status(sonuc)
-  ham <- httr2::resp_body_string(sonuc)
+  # Ağ geçidi hatalarında (ör. 502) gövde boş olabilir; bu, çalışmayı durdurmamalı.
+  ham <- tryCatch(httr2::resp_body_string(sonuc), error = function(e) "")
   txt_yaz(ham, paste0(dosya_koku, "_yanit.json"))
+  j <- tryCatch(jsonlite::fromJSON(ham, simplifyVector = FALSE), error = function(e) NULL)
 
   if (satir$http_durum != 200) {
-    j <- tryCatch(jsonlite::fromJSON(ham, simplifyVector = FALSE), error = function(e) NULL)
     satir$hata_kodu <- as.character(j$error$code %||% j$error$type %||% NA)
-    satir$hata <- j$error$message %||% substr(ham, 1, 500)
+    satir$hata <- xml_guvenli(j$error$message %||% if (nzchar(ham)) substr(ham, 1, 500) else "(boş yanıt)")
     satir$durum <- if (satir$hata_kodu %in% ODEVE_OZGU_HATA_KODLARI) "api_reddi" else "http_hatasi"
     return(kayit_satiri_yaz(satir, dosya_koku))
   }
-  j <- jsonlite::fromJSON(ham, simplifyVector = FALSE)
+  if (is.null(j)) {
+    satir$durum <- "gecersiz_yanit"
+    satir$hata <- "HTTP 200 ama yanıt gövdesi çözümlenemedi (ham yanıt _yanit.json dosyasında)."
+    return(kayit_satiri_yaz(satir, dosya_koku))
+  }
   a <- yanit_ayristir(j, ayar$api_ucu)
   txt_yaz(a$cikti, paste0(dosya_koku, "_cikti.txt"))
   satir <- cbind(satir, as.data.frame(a[setdiff(names(a), "cikti")], stringsAsFactors = FALSE),

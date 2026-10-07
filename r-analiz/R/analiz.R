@@ -151,8 +151,11 @@ kappa_hesapla <- function(k1, k2, kategoriler, B = 2000, tohum = 1) {
   boot <- replicate(B, hesapla(sample.int(length(a), replace = TRUE)))
   ga <- apply(boot, 1, stats::quantile, probs = c(0.025, 0.975), na.rm = TRUE)
 
+  ham <- data.frame(agirlik = names(turler), kappa = unname(deger), ga_alt = unname(ga[1, ]),
+                    ga_ust = unname(ga[2, ]), stringsAsFactors = FALSE)
   list(
     n = length(a),
+    tablo_ham = ham,   # yuvarlanmamış; metin biçimlendirmesi bundan yapılır
     tablo = data.frame(
       agirlik = names(turler), kappa = yuvarla(deger, 3),
       ga_alt = yuvarla(ga[1, ], 3), ga_ust = yuvarla(ga[2, ], 3),

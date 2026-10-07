@@ -20,6 +20,15 @@ gerekli_paketler <- function(paketler) {
   invisible(TRUE)
 }
 
+# Excel'e yazılacak metni temizler: renkli konsol hata mesajlarındaki ANSI
+# kaçış kodlarını ve XML'de geçersiz denetim karakterlerini atar (bunlar Excel'de
+# "içerikte sorun bulundu" onarım uyarısına yol açar).
+xml_guvenli <- function(x) {
+  if (!is.character(x)) return(x)
+  x <- gsub("\033\\[[0-9;]*[A-Za-z]", "", x, perl = TRUE)
+  gsub("[\x01-\x08\x0B\x0C\x0E-\x1F\x7F]", "", x, perl = TRUE)
+}
+
 # Excel dosyası yazma -------------------------------------------------------------
 # openxlsx::saveWorkbook(), hedef dosya Excel'de açıkken (Windows yazma kilidi)
 # hata vermeden başarısız olur; burada açık bir hatayla durulur.
@@ -46,6 +55,7 @@ liste_dogrulama <- function(wb, sayfa, sutun, satirlar, secenekler) {
 # tutulur: Türkçe bölgesel ayarlı Excel, virgülle ayrılmış CSV'yi tek sütunda
 # açar ve kaydederken ayırıcıyı ve karakter kodlamasını değiştirir.
 xlsx_yaz <- function(x, yol, sayfa = "veri") {
+  x[] <- lapply(x, xml_guvenli)
   wb <- openxlsx::createWorkbook()
   openxlsx::addWorksheet(wb, sayfa)
   openxlsx::writeData(wb, sayfa, x, withFilter = TRUE)

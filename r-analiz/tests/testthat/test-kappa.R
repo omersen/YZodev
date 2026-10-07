@@ -38,3 +38,11 @@ test_that("kappa_hesapla etiketleri doğru sıraya çevirir ve tanımsız etiket
   expect_true(all(s$tablo$ga_alt <= s$tablo$kappa & s$tablo$kappa <= s$tablo$ga_ust))
   expect_error(kappa_hesapla(c(k1[-1], "Yarım"), k2, kat), "Tanımsız")
 })
+
+test_that("kappa yuvarlanmamış değerleri de döndürür (metin biçimi tek kez yuvarlanır)", {
+  s <- kappa_hesapla(kat[c(1, 2, 3, 4, 4, 3, 2, 1, 4, 4)], kat[c(1, 2, 3, 4, 3, 3, 2, 2, 4, 4)], kat, B = 50)
+  ham <- s$tablo_ham$kappa[s$tablo_ham$agirlik == "karesel"]
+  expect_equal(ham, agirlikli_kappa(c(1, 2, 3, 4, 4, 3, 2, 1, 4, 4), c(1, 2, 3, 4, 3, 3, 2, 2, 4, 4), 4, 2))
+  expect_equal(katsayi_bicim(0.964613), ".96")
+  expect_equal(katsayi_bicim(yuvarla(0.964613, 3)), ".97")   # iki kez yuvarlamanın hatası
+})

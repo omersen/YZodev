@@ -34,6 +34,14 @@ if (length(onayli) < nrow(kontrol)) {
 }
 if (length(onayli) == 0) stop("Kontrol edilmiş ödev yok. kontrol_listesi.xlsx'i doldurun.")
 
+# Kaynağı değişip yeni sürümü (.yeni.txt) karara bağlanmamış ödevler gönderilmez.
+bekleyen <- onayli[file.exists(file.path(AYAR$veri_dizini, "yonergeler", paste0(onayli, ".yeni.txt")))]
+if (length(bekleyen) > 0) {
+  message("Yeni sürümü bekleyen (", length(bekleyen), ") ödev gönderilmeyecek; .yeni.txt dosyalarını ",
+          "karara bağlayıp silin: ", paste(bekleyen, collapse = ", "))
+  onayli <- setdiff(onayli, bekleyen)
+}
+if (length(onayli) == 0) stop("Gönderilebilecek ödev yok.")
 yonergeler <- vapply(onayli, function(id) txt_oku(file.path(AYAR$veri_dizini, "yonergeler", paste0(id, ".txt"))), "")
 bos <- !nzchar(trimws(yonergeler))
 if (any(bos)) {
@@ -90,6 +98,7 @@ if (nrow(yapilacak) > 0) {
   # 400/401/403/404 (istek yapısı ya da yetki) ve kota hatası: tüm çağrılar aynı
   # hatayı vereceği için durulur. Ödeve özgü retler (ör. güvenlik filtresi,
   # "api_reddi") ve diğer hatalar kaydedilir, sonraki ödeve geçilir.
+  ust_uste_ag_sorunu <- 0
   for (k in seq_len(nrow(yapilacak))) {
     id <- yapilacak$odev_id[k]
     t <- yapilacak$tekrar[k]
@@ -103,6 +112,15 @@ if (nrow(yapilacak) > 0) {
                     satir$durum %||% NA,
                     if (!is.na(satir$hata)) paste0(" | HATA: ", satir$hata) else "",
                     satir$sure_sn))
+    # Art arda zaman aşımı ya da ağ hatası: ayar ya da bağlantı sorunu olasıdır.
+    # Zaman aşımına uğrayan çağrılar sunucuda ücretlendirilebileceği için durulur.
+    ust_uste_ag_sorunu <- if (isTRUE(satir$durum %in% c("zaman_asimi", "ag_hatasi"))) ust_uste_ag_sorunu + 1 else 0
+    if (ust_uste_ag_sorunu >= 3) {
+      stop("Art arda 3 çağrı zaman aşımına uğradı ya da ağ hatası verdi (son durum: ", satir$durum, "). ",
+           "Zaman aşımıysa 00_ayarlar.R'de zaman_asimi_sn'yi artırın (akıl yürütme düzeyi yüksekse üretim ",
+           "uzun sürer); ağ hatasıysa bağlantıyı ve taban_url'yi denetleyin. Tamamlanan çağrılar tekrarlanmaz.",
+           call. = FALSE)
+    }
     if (isTRUE(satir$http_durum == 429) && kota_hatasi_mi(satir$hata)) {
       stop("API kotası/bakiyesi yetersiz (HTTP 429, insufficient_quota). Hesabınıza bakiye ",
            "ekleyip betiği yeniden çalıştırın; tamamlanan çağrılar tekrarlanmaz.")
@@ -135,9 +153,13 @@ if (nrow(api_reddi) > 0) {
           "nasıl raporlanacağına siz karar verin): ",
           paste0(api_reddi$odev_id, " (", api_reddi$hata_kodu, ")", collapse = ", "))
 }
-diger <- son$odev_id[son$durum %in% c("zaman_asimi", "ag_hatasi", "http_hatasi")]
+diger <- son$odev_id[son$durum %in% c("zaman_asimi", "ag_hatasi", "http_hatasi", "gecersiz_yanit")]
 if (length(diger) > 0) message("Hata nedeniyle tamamlanamayan çağrılar (betiği yeniden çalıştırınca yeniden denenir): ",
                                paste(diger, collapse = ", "))
+if (any(son$durum %in% "zaman_asimi")) {
+  message("Zaman aşımı olan çağrılar var. Yeniden çalıştırmadan önce zaman_asimi_sn'yi artırmanız önerilir; ",
+          "aksi hâlde aynı çağrılar yine kesilip yeniden ücretlendirilebilir.")
+}
 reddedilen <- son$odev_id[!is.na(son$ret) & nzchar(son$ret %||% "")]
 if (length(reddedilen) > 0) message("Modelin yanıtında reddettiği çağrılar (formda 'model_reddi' sütunu): ",
                                     paste(reddedilen, collapse = ", "))

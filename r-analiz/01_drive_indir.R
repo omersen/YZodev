@@ -74,7 +74,7 @@ for (i in seq_len(nrow(envanter))) {
   message(sprintf("[%d/%d] %s indiriliyor", i, nrow(envanter), envanter$odev_id[i]))
   sonuc <- tryCatch(drive_dosya_indir(envanter$drive_id[i], hedef, envanter$mime_turu[i]),
                     error = function(e) e)
-  envanter$indirme[i] <- if (inherits(sonuc, "error")) paste("HATA:", conditionMessage(sonuc)) else "indirildi"
+  envanter$indirme[i] <- if (inherits(sonuc, "error")) paste("HATA:", xml_guvenli(conditionMessage(sonuc))) else "indirildi"
 }
 
 xlsx_yaz(envanter[, setdiff(names(envanter), "ad")], file.path(AYAR$veri_dizini, "envanter.xlsx"))

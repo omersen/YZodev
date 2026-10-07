@@ -15,21 +15,53 @@ dir.create(analiz_dizini, showWarnings = FALSE, recursive = TRUE)
 kat <- AYAR$kategoriler
 ozet <- character(0)
 
-# 1. Tamamlanabilirlik dağılımı ------------------------------------------------------
-k1_tum <- xlsx_oku(file.path(kodlama_dizini, "kodlayici1_tamamlanabilirlik.xlsx"))
-if (is.null(k1_tum$tekrar)) k1_tum$tekrar <- 1   # elle hazırlanmış özgün kod dosyası için
-# Form 04 tarafından üretildiyse, kodlanan çıktıların şu anki ayarlarla üretildiği denetlenir.
-if (!is.null(k1_tum$ayar_sha256)) {
-  gerekli_paketler(c("jsonlite", "digest"))
-  if (any(!k1_tum$ayar_sha256 %in% ayar_ozeti(AYAR))) {
-    stop("Kodlama formundaki çıktılar şu anki 00_ayarlar.R ayarlarıyla üretilmemiş (model, istem ya da ",
-         "parametre değişmiş). Ayarları kodlanan çalıştırmadakine döndürün ya da 04'ü yeniden çalıştırıp ",
-         "yeni çıktıları kodlayın.", call. = FALSE)
+# Kodlama formunu okur: "kodlama" sayfası ada göre (kodlayıcı önüne yedek sayfa
+# eklemiş olabilir), boş "tekrar" hücreleri çağrı dosyası adından tamamlanır,
+# yinelenen ödev x tekrar satırlarında durulur.
+form_oku <- function(yol) {
+  sayfa <- if ("kodlama" %in% openxlsx::getSheetNames(yol)) "kodlama" else 1
+  d <- xlsx_oku(yol, sayfa)
+  if (is.null(d$odev_id) || is.null(d$kategori)) stop(yol, ": 'odev_id' ve 'kategori' sütunları gerekli.", call. = FALSE)
+  d <- d[!is.na(d$odev_id), ]
+  if (is.null(d$tekrar)) d$tekrar <- 1   # elle hazırlanmış özgün kod dosyası için
+  t <- suppressWarnings(as.integer(d$tekrar))
+  bos <- is.na(t)
+  if (any(bos) && !is.null(d$cagri_dosyasi)) {
+    t[bos] <- suppressWarnings(as.integer(sub("^.*_t([0-9]+)_.*$", "\\1", d$cagri_dosyasi[bos])))
+  } else if (any(bos) && all(t %in% c(1L, NA))) {
+    message(yol, ": ", sum(bos), " satırda 'tekrar' boş; 1 kabul edildi.")
+    t[bos] <- 1L
   }
+  if (anyNA(t)) stop(yol, ": 'tekrar' değeri boş ya da geçersiz: ", paste(d$odev_id[is.na(t)], collapse = ", "), call. = FALSE)
+  d$tekrar <- t
+  yineleme <- duplicated(d[, c("odev_id", "tekrar")])
+  if (any(yineleme)) {
+    stop(yol, ": aynı ödev ve tekrar için birden çok satır var: ",
+         paste(unique(d$odev_id[yineleme]), collapse = ", "), ". Fazla satırları silin.", call. = FALSE)
+  }
+  d
 }
+
+# Kodlanan çıktıların şu anki ayarlarla üretildiğini denetler (yalnızca 04'ün ürettiği formlar).
+ayar_denetle <- function(d, etiket) {
+  if (is.null(d$ayar_sha256)) return(invisible(TRUE))
+  gerekli_paketler(c("jsonlite", "digest"))
+  eski_ayar <- unique(d$odev_id[!d$ayar_sha256 %in% ayar_ozeti(AYAR)])
+  if (length(eski_ayar) > 0) {
+    stop(etiket, " formundaki şu ödevlerin çıktıları şu anki 00_ayarlar.R ayarlarıyla üretilmemiş ",
+         "(model, istem ya da parametre değişmiş): ", paste(eski_ayar, collapse = ", "),
+         ". Ayarları kodlanan çalıştırmadakine döndürün ya da 04'ü yeniden çalıştırıp yeni çıktıları kodlayın.",
+         call. = FALSE)
+  }
+  invisible(TRUE)
+}
+
+# 1. Tamamlanabilirlik dağılımı ------------------------------------------------------
+k1_tum <- form_oku(file.path(kodlama_dizini, "kodlayici1_tamamlanabilirlik.xlsx"))
 # Onay filtresi: formlar bu iş akışıyla (04) üretildiyse, kontrol listesinde
 # onayı kaldırılan ödevler ÜÇ analizden de (dağılım, kappa, nitelikler) aynı
 # biçimde çıkarılır. Elle hazırlanmış özgün kod dosyalarına uygulanmaz.
+# Ayar denetimi filtreden SONRA yapılır: 04 onaysız satırları güncellemez.
 onayli <- NULL
 kontrol_yolu <- file.path(AYAR$veri_dizini, "kontrol_listesi.xlsx")
 if (!is.null(k1_tum$cagri_dosyasi) && file.exists(kontrol_yolu)) {
@@ -40,6 +72,7 @@ if (!is.null(k1_tum$cagri_dosyasi) && file.exists(kontrol_yolu)) {
   k1_tum <- k1_tum[k1_tum$odev_id %in% onayli, ]
   if (nrow(k1_tum) == 0) stop("Kodlama formundaki ödevlerin hiçbiri kontrol listesinde onaylı değil.", call. = FALSE)
 }
+ayar_denetle(k1_tum, "Birinci kodlayıcı")
 k1 <- k1_tum[k1_tum$tekrar %in% 1, ]   # bildirideki analiz: ödev başına bir çağrı
 if (all(is.na(k1$kategori))) stop("Birinci kodlayıcı formunda kodlanmış ödev yok.", call. = FALSE)
 dagilim <- kategori_tablosu(k1$kategori, kat)
@@ -75,16 +108,27 @@ if (R_tekrar > 1) {
 k2_yolu <- file.path(kodlama_dizini, "kodlayici2_tamamlanabilirlik.xlsx")
 uyusma <- NULL
 if (file.exists(k2_yolu)) {
-  k2 <- xlsx_oku(k2_yolu)
+  k2 <- form_oku(k2_yolu)
   if (!is.null(onayli)) k2 <- k2[k2$odev_id %in% onayli, ]
-  ortak <- merge(k1[, c("odev_id", "kategori")], k2[, c("odev_id", "kategori")],
-                 by = "odev_id", suffixes = c("_1", "_2"))
+  k2 <- k2[k2$tekrar %in% 1, ]
+  ayar_denetle(k2, "İkinci kodlayıcı")
+  ortak_sutun <- if (!is.null(k1$cagri_dosyasi) && !is.null(k2$cagri_dosyasi)) c("odev_id", "kategori", "cagri_dosyasi") else c("odev_id", "kategori")
+  ortak <- merge(k1[, ortak_sutun], k2[, ortak_sutun], by = "odev_id", suffixes = c("_1", "_2"))
+  # İki kodlayıcı aynı çağrının çıktısını kodlamış olmalı
+  if ("cagri_dosyasi_1" %in% names(ortak)) {
+    farkli <- ortak$odev_id[ortak$cagri_dosyasi_1 != ortak$cagri_dosyasi_2]
+    if (length(farkli) > 0) {
+      stop("İki kodlayıcı şu ödevlerde farklı çağrıların çıktısını kodlamış: ", paste(farkli, collapse = ", "),
+           ". İkinci kodlayıcıya güncel formu gönderip bu satırları yeniden kodlatın.", call. = FALSE)
+    }
+  }
   if (sum(stats::complete.cases(ortak)) >= 2) {
     uyusma <- kappa_hesapla(ortak$kategori_1, ortak$kategori_2, kat)
     print(uyusma$tablo)
     print(uyusma$capraz_tablo)
-    kq <- uyusma$tablo[uyusma$tablo$agirlik == "karesel", ]
-    kd <- uyusma$tablo[uyusma$tablo$agirlik == "dogrusal", ]
+    # Biçimlendirme yuvarlanmamış değerlerden yapılır (iki kez yuvarlama .xx45 değerlerini kaydırır).
+    kq <- uyusma$tablo_ham[uyusma$tablo_ham$agirlik == "karesel", ]
+    kd <- uyusma$tablo_ham[uyusma$tablo_ham$agirlik == "dogrusal", ]
     ozet <- c(ozet, sprintf(
       "Rastgele seçilen %d ödev ikinci bir kodlayıcı tarafından bağımsız olarak sınıflandırılmış; ağırlıklı Cohen kappa (karesel ağırlık) %s [%%95 GA: %s, %s], (doğrusal ağırlık) %s [%s, %s]; yüzde uyum %%%s.",
       uyusma$n, katsayi_bicim(kq$kappa), katsayi_bicim(kq$ga_alt), katsayi_bicim(kq$ga_ust),
@@ -98,6 +142,12 @@ nitelik_yolu <- file.path(kodlama_dizini, "tasarim_nitelikleri.xlsx")
 nitelikler <- NULL
 if (file.exists(nitelik_yolu)) {
   nf <- xlsx_oku(nitelik_yolu, "nitelikler")
+  nf <- nf[!is.na(nf$odev_id), ]
+  if (!is.null(nf$yonerge_degisti) && any(!is.na(nf$yonerge_degisti))) {
+    message("UYARI: yönergesi değiştiği hâlde nitelik kodları gözden geçirilmemiş ödev(ler): ",
+            paste(nf$odev_id[!is.na(nf$yonerge_degisti)], collapse = ", "),
+            " ('yonerge_degisti' hücresini gözden geçirdikten sonra silin).")
+  }
   kk <- xlsx_oku(nitelik_yolu, "kod_kitabi")
   sutunlar <- intersect(kk$sutun, names(nf))
   if (!is.null(onayli)) {

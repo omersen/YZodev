@@ -2,18 +2,26 @@
 # 02_metin_cikar.R : İndirilen dosyalardan ödev yönergesi metnini çıkarır
 # -----------------------------------------------------------------------------
 # Çıktılar (veri/ altında):
-#   metin_ham/O001.txt   : makinenin çıkardığı metin (her çalıştırmada yenilenir)
+#   metin_ham/O001.txt   : makinenin çıkardığı metin
 #   yonergeler/O001.txt  : YZ'ye GÖNDERİLECEK metin. İlk çalıştırmada ham metnin
 #                          kopyasıdır; araştırmacı bu dosyayı düzeltir (ad-soyad,
 #                          öğrenci no, kapak sayfası, ödevle ilgisiz açıklamalar).
-#                          Var olan dosyanın üzerine YAZILMAZ; elle yapılan
-#                          düzeltmeler korunur.
+#                          Elle yapılan düzeltmelerin üzerine yazılmaz.
 #   kontrol_listesi.xlsx : her ödev için kalite göstergeleri ve elle doldurulacak
 #                          "kontrol_edildi" sütunu (evet/hayır).
+# Drive'daki kaynak dosya değişirse (ham metnin özeti kontrol listesinde tutulur):
+#   - yönerge hiç düzenlenmemişse yeni metinle değiştirilir;
+#   - elle düzenlenmişse yeni metin <id>.yeni.txt olarak yazılır. Bu dosya
+#     durdukça uyarı sürer ve 03 o ödevi göndermez; yönergeyi güncelleyip
+#     .yeni.txt dosyasını silin;
+#   - her iki durumda kontrol işareti sıfırlanır.
+# Dosyalar, kontrol listesi başarıyla kaydedildikten SONRA yazılır; liste Excel'de
+# açık olduğu için kayıt başarısız olursa hiçbir şey değişmez ve değişiklik bir
+# sonraki çalıştırmada yine algılanır. Okunamayan dosya "değişti" sayılmaz.
 # =============================================================================
 
 source("00_ayarlar.R", encoding = "UTF-8")
-gerekli_paketler(c("xml2", "pdftools", "stringi", "openxlsx"))
+gerekli_paketler(c("xml2", "pdftools", "stringi", "openxlsx", "digest"))
 
 envanter <- xlsx_oku(file.path(AYAR$veri_dizini, "envanter.xlsx"))
 ham_metin_dizini <- file.path(AYAR$veri_dizini, "metin_ham")
@@ -26,6 +34,13 @@ if (isTRUE(AYAR$drive_donusturme_izni)) {
   drive_baglan(AYAR$drive_email, salt_okunur = FALSE)
 }
 
+kontrol_yolu <- file.path(AYAR$veri_dizini, "kontrol_listesi.xlsx")
+eski <- if (file.exists(kontrol_yolu)) xlsx_oku(kontrol_yolu) else NULL
+eski_deger <- function(id, sutun) {
+  if (is.null(eski) || is.null(eski[[sutun]])) return(NA)
+  eski[[sutun]][match(id, eski$odev_id)]
+}
+
 # Olası kişisel veri örüntüleri (yalnızca uyarı amaçlı; elle kontrol şarttır)
 kisisel_veri_oruntuleri <- c(
   eposta = "[[:alnum:]._%+-]+@[[:alnum:].-]+\\.[[:alpha:]]{2,}",
@@ -35,6 +50,7 @@ kisisel_veri_oruntuleri <- c(
 )
 
 satirlar <- vector("list", nrow(envanter))
+yazilacak <- list()   # kontrol listesi kaydedildikten sonra yazılacak dosyalar
 for (i in seq_len(nrow(envanter))) {
   id <- envanter$odev_id[i]
   yol <- envanter$yerel_yol[i]
@@ -45,7 +61,7 @@ for (i in seq_len(nrow(envanter))) {
   } else {
     tryCatch(yerel_metin_cikar(yol),
              error = function(e) list(metin = NA_character_, bilgi = list(),
-                                      yontem = paste("HATA:", conditionMessage(e))))
+                                      yontem = paste("HATA:", xml_guvenli(conditionMessage(e)))))
   }
 
   # Yerelde okunamadıysa ya da PDF taranmış görünüyorsa: Drive dönüştürmesi (OCR)
@@ -59,30 +75,35 @@ for (i in seq_len(nrow(envanter))) {
   }
 
   metin <- if (is.na(r$metin)) "" else r$metin
+  okundu <- nzchar(trimws(metin)) && !grepl("HATA|yok|desteklenmeyen", r$yontem)
   ham_yol <- file.path(ham_metin_dizini, paste0(id, ".txt"))
-  eski_ham <- if (file.exists(ham_yol)) txt_oku(ham_yol) else NA_character_
-  # Drive'daki dosya güncellendiyse ham metin değişir. Yönerge hiç
-  # düzenlenmemişse yeni metinle değiştirilir; elle düzenlenmişse yeni metin
-  # <id>.yeni.txt olarak yazılır ve araştırmacının karar vermesi beklenir.
-  # Her iki durumda da kontrol işareti sıfırlanır.
-  kaynak_degisti <- !is.na(eski_ham) && !identical(metin_temizle(eski_ham), metin_temizle(metin))
-  txt_yaz(metin, ham_yol)
   hedef <- file.path(yonerge_dizini, paste0(id, ".txt"))
-  yeni_surum <- ""
+  yeni_yol <- file.path(yonerge_dizini, paste0(id, ".yeni.txt"))
+
+  # Değişiklik, kontrol listesinde saklanan son ham metin özetine göre belirlenir.
+  onceki_ozet <- eski_deger(id, "ham_sha256")
+  yeni_ozet <- sha256(metin_temizle(metin))
+  kaynak_degisti <- okundu && !is.na(onceki_ozet) && !identical(onceki_ozet, yeni_ozet)
+  ham_ozet <- if (okundu || is.na(onceki_ozet)) yeni_ozet else onceki_ozet   # okunamazsa referans korunur
+
+  gonderilecek <- if (file.exists(hedef)) txt_oku(hedef) else metin
   if (!file.exists(hedef)) {
-    txt_yaz(metin, hedef)
+    yazilacak[[length(yazilacak) + 1]] <- list(hedef, metin)
   } else if (kaynak_degisti) {
-    if (identical(metin_temizle(txt_oku(hedef)), metin_temizle(eski_ham))) {
-      txt_yaz(metin, hedef)
+    onceki_ham <- if (file.exists(ham_yol)) txt_oku(ham_yol) else NA_character_
+    duzenlenmemis <- !is.na(onceki_ham) && identical(metin_temizle(gonderilecek), metin_temizle(onceki_ham))
+    if (duzenlenmemis) {
+      yazilacak[[length(yazilacak) + 1]] <- list(hedef, metin)
+      gonderilecek <- metin
     } else {
-      yeni_surum <- file.path(yonerge_dizini, paste0(id, ".yeni.txt"))
-      txt_yaz(metin, yeni_surum)
+      yazilacak[[length(yazilacak) + 1]] <- list(yeni_yol, metin)
     }
   }
+  if (okundu || !file.exists(ham_yol)) yazilacak[[length(yazilacak) + 1]] <- list(ham_yol, metin)
+  bekleyen_yeni <- file.exists(yeni_yol) || any(vapply(yazilacak, function(y) identical(y[[1]], yeni_yol), logical(1)))
 
-  # Göstergeler, API'ye GÖNDERİLECEK metin (yonergeler/<id>.txt) üzerinden
-  # hesaplanır; araştırmacının elle yazdığı ya da yapıştırdığı metin de taranır.
-  gonderilecek <- txt_oku(hedef)
+  # Göstergeler, API'ye GÖNDERİLECEK metin üzerinden hesaplanır; araştırmacının
+  # elle yazdığı ya da yapıştırdığı metin de taranır.
   b <- r$bilgi
   kv <- names(kisisel_veri_oruntuleri)[vapply(kisisel_veri_oruntuleri,
                                                function(p) grepl(p, gonderilecek, perl = TRUE), logical(1))]
@@ -103,7 +124,8 @@ for (i in seq_len(nrow(envanter))) {
     yz_ifadesi_geciyor = grepl("(?i)yapay\\s*zek|chatgpt|\\bYZ\\b|\\bÜYZ\\b", gonderilecek, perl = TRUE),
     ayni_icerik = if (is.null(envanter$ayni_icerik) || is.na(envanter$ayni_icerik[i])) "" else envanter$ayni_icerik[i],
     kaynak_degisti = kaynak_degisti,
-    yeni_surum = basename(yeni_surum),
+    yeni_surum_bekliyor = bekleyen_yeni,
+    ham_sha256 = ham_ozet,
     stringsAsFactors = FALSE
   )
 }
@@ -119,30 +141,23 @@ kontrol$dikkat <- trimws(paste(
   ifelse(nzchar(kontrol$ust_alt_bilgi), "üst/alt bilgi var (gönderilmez);", ""),
   ifelse(nzchar(kontrol$ayni_icerik), "yinelenen dosya;", ""),
   ifelse(grepl("HATA|yok|desteklenmeyen", kontrol$yontem), "okunamadı;", ""),
-  ifelse(kontrol$kaynak_degisti & nzchar(kontrol$yeni_surum),
-         paste0("KAYNAK DOSYA DEĞİŞTİ: yeni metin ", kontrol$yeni_surum, " dosyasında, yönergeyi güncelleyin;"),
-         ifelse(kontrol$kaynak_degisti, "KAYNAK DOSYA DEĞİŞTİ: yönerge yeni metinle güncellendi, yeniden kontrol edin;", ""))
+  ifelse(kontrol$kaynak_degisti & !kontrol$yeni_surum_bekliyor,
+         "KAYNAK DOSYA DEĞİŞTİ: yönerge yeni metinle güncellendi, yeniden kontrol edin;", ""),
+  ifelse(kontrol$yeni_surum_bekliyor,
+         paste0("YENİ SÜRÜM BEKLİYOR: ", kontrol$odev_id, ".yeni.txt dosyasındaki metne göre yönergeyi ",
+                "güncelleyip .yeni.txt dosyasını silin (silinene kadar 03 bu ödevi göndermez);"), "")
 ))
 
-# Önceki kontrol işaretleri korunur
-kontrol_yolu <- file.path(AYAR$veri_dizini, "kontrol_listesi.xlsx")
+# Önceki kontrol işaretleri korunur; kaynağı değişen ödevlerinki sıfırlanır.
 kontrol$kontrol_edildi <- ""
 kontrol$not <- ""
-if (file.exists(kontrol_yolu)) {
-  eski <- xlsx_oku(kontrol_yolu)
-  m <- match(kontrol$odev_id, eski$odev_id)
-  var <- !is.na(m)
+if (!is.null(eski)) {
   for (s in c("kontrol_edildi", "not")) {
-    deger <- as.character(eski[[s]] %||% rep(NA, nrow(eski)))[m[var]]
-    kontrol[[s]][var] <- ifelse(is.na(deger), "", deger)
+    deger <- as.character(eski_deger(kontrol$odev_id, s))
+    kontrol[[s]] <- ifelse(is.na(deger), "", deger)
   }
 }
-kontrol$kontrol_edildi[kontrol$kaynak_degisti] <- ""   # değişen ödev yeniden kontrol edilmeli
-if (any(kontrol$kaynak_degisti)) {
-  message("UYARI: Drive'daki kaynak dosyası değişen ödev(ler): ",
-          paste(kontrol$odev_id[kontrol$kaynak_degisti], collapse = ", "),
-          ". Kontrol işaretleri sıfırlandı; 'dikkat' sütununa bakın.")
-}
+kontrol$kontrol_edildi[kontrol$kaynak_degisti] <- ""
 
 wb <- openxlsx::createWorkbook()
 openxlsx::addWorksheet(wb, "kontrol")
@@ -151,8 +166,19 @@ sutun <- which(names(kontrol) == "kontrol_edildi")
 liste_dogrulama(wb, "kontrol", sutun, 2:(nrow(kontrol) + 1), c("evet", "hayır"))
 openxlsx::freezePane(wb, "kontrol", firstRow = TRUE, firstCol = TRUE)
 openxlsx::setColWidths(wb, "kontrol", cols = seq_along(kontrol), widths = "auto")
-xlsx_kaydet(wb, kontrol_yolu)
+xlsx_kaydet(wb, kontrol_yolu)   # başarısız olursa burada durulur; aşağıdaki dosyalar yazılmaz
 
+for (y in yazilacak) txt_yaz(y[[2]], y[[1]])
+
+if (any(kontrol$kaynak_degisti)) {
+  message("UYARI: Drive'daki kaynak dosyası değişen ödev(ler): ",
+          paste(kontrol$odev_id[kontrol$kaynak_degisti], collapse = ", "),
+          ". Kontrol işaretleri sıfırlandı; 'dikkat' sütununa bakın.")
+}
+if (any(kontrol$yeni_surum_bekliyor)) {
+  message("Bekleyen yeni sürüm (.yeni.txt) olan ödev(ler): ",
+          paste(kontrol$odev_id[kontrol$yeni_surum_bekliyor], collapse = ", "))
+}
 message("\nYöntemlere göre dosya sayısı:")
 print(table(kontrol$yontem))
 message(sum(nzchar(kontrol$dikkat)), " ödev dikkat gerektiriyor (kontrol_listesi.xlsx, 'dikkat' sütunu).")
