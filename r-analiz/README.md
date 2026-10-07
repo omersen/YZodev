@@ -25,23 +25,30 @@ Bu klasör, "Öğretmen adaylarınca hazırlanan ödevlerin üretken yapay zekâ
 | `01_drive_indir.R` | Klasörü alt klasörleriyle tarar, kısayolları çözer, dosyaları anonim adlarla (O001, O002...) indirir; aynı içerikli dosyaları işaretler | `veri/envanter.xlsx`, `veri/kimlik_eslestirme.xlsx` |
 | `02_metin_cikar.R` | docx, Google Dokümanlar, pdf, doc/odt/rtf dosyalarından metin çıkarır; tabloları satır satır, metin kutularını bir kez, dipnotları ve Word denklemlerini okur; taranmış PDF, görsel, olası kişisel veri gibi durumları işaretler | `veri/yonergeler/*.txt`, `veri/kontrol_listesi.xlsx` |
 | (elle) | `veri/yonergeler/*.txt` dosyalarını okuyun; ad-soyad, numara, kapak sayfası gibi yönerge dışı metni silin; `kontrol_listesi.xlsx` içinde `kontrol_edildi = evet` yapın | |
-| `03_yz_cagri.R` | Onaylanan her yönergeyi bağımsız bir API çağrısıyla gönderir; istek ve ham yanıtı saklar; kesintide kaldığı yerden devam eder | `cikti/api_kayitlari/` (istek, ham yanıt, çıktı ve kayıt dosyaları), `cikti/cagri_kaydi.xlsx`, `cikti/oturum_*.json` |
-| `04_kodlama_formu.R` | Yönerge ve YZ çıktısını yan yana koyan Excel kodlama formları; ikinci kodlayıcı için tohumla seçilmiş %25'lik kör alt örneklem; tasarım nitelikleri şablonu | `cikti/kodlama/*.xlsx` |
+| `03_yz_cagri.R` | Onaylanan her yönergeyi bağımsız bir API çağrısıyla gönderir; her çağrının isteğini, ham yanıtını ve kaydını ayrı dosyada saklar; kesintide kaldığı yerden devam eder; bir ödeve özgü retlerde (ör. güvenlik filtresi) durmaz, yapılandırma hatası ve kota bitiminde hemen durur | `cikti/api_kayitlari/` (istek, ham yanıt, çıktı ve kayıt dosyaları), `cikti/cagri_kaydi.xlsx`, `cikti/oturum_*.json` |
+| `04_kodlama_formu.R` | Yönerge ve YZ çıktısını yan yana koyan Excel kodlama formları; ikinci kodlayıcı için tohumla seçilmiş %25'lik kör alt örneklem; tüm onaylı yönergeler için tasarım nitelikleri şablonu | `cikti/kodlama/*.xlsx` |
 | `05_analiz.R` | Kategori dağılımı, ağırlıklı kappa (doğrusal ve karesel, bootstrap %95 GA), tasarım nitelikleri sıklıkları, keşfedici çapraz tablo, sunum grafikleri ve bildiri biçiminde Türkçe özet cümleleri | `cikti/analiz/` |
 
 Her betik `source("01_drive_indir.R")` biçiminde sırayla çalıştırılır. `veri/` ve `cikti/` klasörleri öğrenci verisi içerdiği için Git'e gönderilmez.
+
+**Yeniden çalıştırma.** Betikler tekrar tekrar çalıştırılabilir:
+- Drive'da güncellenen bir dosyanın yönergesi düzenlenmemişse yeni metinle değiştirilir; elle düzenlenmişse yeni metin `<id>.yeni.txt` olarak yazılır. Her iki durumda kontrol işareti sıfırlanır.
+- Sistem istemi, şablon, model ya da herhangi bir üretim parametresi değişirse bütün ödevler yeniden çağrılır; farklı ayarlarla üretilmiş çıktılar karışmaz.
+- Kodlama formlarında eskimiş bir satır (ödev yeniden çağrıldıysa) formun yedeği alındıktan sonra yeni çıktıyla değiştirilir ve kodu boşaltılır. Diğer kodlar, kodlayıcının eklediği sütunlar ve sayfalar korunur.
+- Onayı kaldırılan ödevler üç analizden de (dağılım, kappa, nitelikler) aynı biçimde çıkarılır.
+- Excel'de açık bir dosyaya yazılamazsa betik açık bir mesajla durur; çağrı kayıtları ise her çağrının yanındaki `*_kayit.json` dosyasında güvendedir.
 
 **Özgün kodlarınız duruyorsa.** Sunumdaki sayıların özgün çalışmayla birebir aynı olması için API'yi yeniden çalıştırmanız gerekmez. Özgün kodlamaları `cikti/kodlama/` altına şu sütunlarla koymanız yeterlidir: `kodlayici1_tamamlanabilirlik.xlsx` ve `kodlayici2_tamamlanabilirlik.xlsx` için `odev_id`, `tekrar` (hep 1) ve `kategori` (dört kategori adı `00_ayarlar.R`'deki yazımla); `tasarim_nitelikleri.xlsx` için `nitelikler` sayfasında `odev_id` ve 0/1 nitelik sütunları, `kod_kitabi` sayfasında `sutun` ve `nitelik`. Ardından yalnızca `05_analiz.R` çalıştırılır.
 
 ## Yöntemsel notlar
 
-- **Standartlaştırma ve bağımsızlık.** Bütün yönergeler aynı sistem istemi, aynı şablon ve aynı parametrelerle gönderilir; `previous_response_id` ya da konuşma geçmişi kullanılmadığı için çağrılar arasında bağlam aktarılmaz. Her çağrıda yönerge, sistem istemi ve şablonun SHA-256 özetleri kaydedilir; bu sayede hangi çıktının hangi metinle üretildiği sonradan denetlenebilir.
+- **Standartlaştırma ve bağımsızlık.** Bütün yönergeler aynı sistem istemi, aynı şablon ve aynı parametrelerle gönderilir; `previous_response_id` ya da konuşma geçmişi kullanılmadığı için çağrılar arasında bağlam aktarılmaz. Her çağrıda yönergenin, sistem isteminin, şablonun ve tüm üretim ayarlarının SHA-256 özetleri kaydedilir; bu sayede hangi çıktının hangi metin ve ayarla üretildiği sonradan denetlenebilir.
 - **Sistem istemi ve şablon.** `00_ayarlar.R` içindeki metinler yer tutucudur. Özgün çalışmadakileri hatırlıyorsanız aynen yazın. İstem, modelin eksik kişisel veriyi uydurup uydurmayacağını ya da soru sorup sormayacağını etkiler; bu nedenle sunumda ve makalede birebir verilmelidir.
 - **"Örnekleme parametreleri sabit tutuldu" ifadesi.** OpenAI'nin Responses API'sinde `seed` parametresi yoktur; Chat Completions'taki `seed` ise "en iyi çaba" düzeyindedir ve belirlenimcilik güvence altında değildir. GPT-5.x akıl yürütme modellerinde `temperature` ve `top_p` büyük olasılıkla yalnızca `reasoning.effort = "none"` iken kabul edilir (bu bilgi ikincil kaynaklardan doğrulandı; OpenAI belgesine bu ortamdan erişilemedi). Raporda hangi parametrelerin sabit tutulduğu (ör. akıl yürütme düzeyi, ayrıntılılık, azami çıktı token sayısı) açıkça yazılmalıdır.
 - **Tek çağrı tek örneklemdir.** Sıcaklık 0 ve sabit tohum ile bile barındırılan modeller aynı girdiye farklı çıktılar verebilmektedir (Atıl vd., 2025). Bir ödevin kategorisi yeniden çalıştırmada değişebilir. Sağlamlık için `tekrar_sayisi` 3 ya da 5 yapılabilir; bu durumda `05_analiz.R` tekrarlar arası tutarlılığı da raporlar.
 - **API ile ChatGPT arayüzü aynı değildir.** Öğrencilerin kullandığı uygulamada model yönlendirme, bellek, web araması ve dosya yükleme gibi araçlar vardır; bu iş akışında bunlar yoktur ve model tek bir istem alır. Tek denemeli sınama, birden çok deneme ve ek yönlendirme yapan bir öğrencinin ulaşabileceği tamamlanma düzeyini olduğundan düşük gösterebilir (Borges vd., 2024, tek bir istem stratejisinde ortalama %65,8, en az bir stratejide %85,1 doğru yanıt bildirmiştir). Öte yandan API ile arayüz arasındaki farkın yönü her görevde aynı değildir; bu nedenle bulgular, belirtilen model ve koşullar için geçerli kabul edilmeli ve öğrencilerin gerçek kullanımına doğrudan genellenmemelidir.
 - **Model sürümü.** Her yanıttaki `model` alanı kaydedilir. `gpt-5.6-sol` için tarihli bir anlık görüntü (snapshot) kimliği OpenAI'nin açık API tanımında bulunamadı; bu nedenle çağrı tarihleri ve yanıtın bildirdiği model adı raporlanmalıdır. Model güncellemeleri davranışı değiştirebilir (Chen vd., 2024).
-- **Kesik yanıtlar.** `status = "incomplete"` (ör. `max_output_tokens`) teknik bir kesintidir; "tamamlanamadı" olarak kodlanmamalıdır. Betik bunları ayırır ve kodlama formuna almaz. Böyle bir durumda sınırı artırıp **bütün** ödevleri yeniden çalıştırmak standartlaştırmayı korur.
+- **Kesik yanıtlar, retler, zaman aşımları.** `status = "incomplete"` (ör. `max_output_tokens`) teknik bir kesintidir; "tamamlanamadı" olarak kodlanmamalıdır. Betik bunları ayırır ve kodlama formuna almaz. Sınır artırıldığında betik ayar değiştiği için **bütün** ödevleri yeniden çağırır; böylece standartlaştırma korunur. API'nin içerik filtresiyle reddettiği ödevler (`api_reddi`) ayrıca listelenir; bunların nasıl raporlanacağı araştırmacının kararıdır. Zaman aşımına uğrayan çağrılar yeniden gönderilmez, çünkü sunucu üretimi sürdürüp ücretlendirebilir; gerekirse `zaman_asimi_sn` artırılmalıdır.
 - **Yalnızca metin gönderilir.** Görsel, çalışma kâğıdı ya da şekil içeren yönergeler `kontrol_listesi.xlsx` içinde işaretlenir; bu ödevlerde YZ'nin görsele erişmediği raporlanmalıdır.
 - **Kappa.** Bildiride ağırlık türü belirtilmemiştir. `05_analiz.R` doğrusal ve karesel ağırlıklı kappayı birlikte verir. `irr::kappa2` ağırlıkları yalnızca gözlenen kategorilerden kurduğu için (36 ödevlik alt örneklemde bir kategori hiç kullanılmazsa sonuç kayar) kappa burada dört kategori sabit tutularak hesaplanır; sonuç testlerde `irr` ve `psych` ile karşılaştırılmıştır.
 - **Raporlama.** Model adı ve yanıtın bildirdiği sürüm, çağrı tarihleri, API ucu, sistem istemi ve şablon (birebir), tüm parametreler, tekrar sayısı ve kesik/ret sayıları raporlanmalıdır (bkz. TRIPOD-LLM; Gallifant vd., 2025). `cikti/oturum_*.json` bu bilgileri tek dosyada toplar.
@@ -56,11 +63,12 @@ Gerçek Drive'a ve OpenAI'ye bağlanmadan, ücretsiz çalışır:
 
 ```r
 # r-analiz klasöründe, terminalde:
-Rscript tests/testthat.R    # birim testleri (metin çıkarma, API gövdesi ve yanıtı, Drive dolaşma, kappa, Türkçe ekler)
-Rscript tests/uctan_uca.R   # 146 yapay ödevle 02-05 adımları; yerel sahte OpenAI sunucusu
+Rscript tests/testthat.R    # birim testleri (metin çıkarma, API gövdesi ve yanıtı, yeniden deneme, Drive dolaşma, kappa, Türkçe ekler)
+Rscript tests/uctan_uca.R   # 148 yapay ödevle 02-05 adımları; yerel sahte OpenAI sunucusu
+Rscript tests/senaryolar.R  # yeniden çalıştırma senaryoları (kaynak değişimi, onay kaldırma, yeni ödevler, eksik kodlama)
 ```
 
-Uçtan uca test, yapay kodlamaları bildirideki dağılımla (61/34/26/23 ve 83/49, 38/16...) üretir ve `05_analiz.R`'nin bildirideki cümleleri ("144 ödevin 61'i (%42,4) ...", "83 ödevin yalnızca 49'unda, yani bu ödevlerin %59,0'ında ...") birebir üretip üretmediğini denetler. 429 ve 500 hatalarından sonra yeniden deneme, kesik yanıt, model reddi, 400 hatasında durma ve kaldığı yerden devam etme senaryoları da sınanır.
+Uçtan uca test, yapay kodlamaları bildirideki dağılımla (61/34/26/23 ve 83/49, 38/16...) üretir ve `05_analiz.R`'nin bildirideki cümleleri ("144 ödevin 61'i (%42,4) ...", "83 ödevin yalnızca 49'unda, yani bu ödevlerin %59,0'ında ...") birebir üretip üretmediğini denetler. 429 ve 500 hatalarından sonra yeniden deneme, kesik yanıt, model reddi, ödeve özgü 400 reddi, zaman aşımının yeniden denenmemesi, yapılandırma hatasında ve kota bitiminde durma, kaldığı yerden devam etme ve ayar değişikliğinde eski kodların karışmaması da sınanır.
 
 ## Kaynaklar
 

@@ -27,7 +27,21 @@ if (!is.null(k1_tum$ayar_sha256)) {
          "yeni çıktıları kodlayın.", call. = FALSE)
   }
 }
+# Onay filtresi: formlar bu iş akışıyla (04) üretildiyse, kontrol listesinde
+# onayı kaldırılan ödevler ÜÇ analizden de (dağılım, kappa, nitelikler) aynı
+# biçimde çıkarılır. Elle hazırlanmış özgün kod dosyalarına uygulanmaz.
+onayli <- NULL
+kontrol_yolu <- file.path(AYAR$veri_dizini, "kontrol_listesi.xlsx")
+if (!is.null(k1_tum$cagri_dosyasi) && file.exists(kontrol_yolu)) {
+  kontrol <- xlsx_oku(kontrol_yolu)
+  onayli <- kontrol$odev_id[tolower(trimws(kontrol$kontrol_edildi %||% "")) %in% "evet"]
+  cikan <- setdiff(unique(k1_tum$odev_id), onayli)
+  if (length(cikan) > 0) message("Onayı kaldırıldığı için analiz dışı bırakılan ödev(ler): ", paste(cikan, collapse = ", "))
+  k1_tum <- k1_tum[k1_tum$odev_id %in% onayli, ]
+  if (nrow(k1_tum) == 0) stop("Kodlama formundaki ödevlerin hiçbiri kontrol listesinde onaylı değil.", call. = FALSE)
+}
 k1 <- k1_tum[k1_tum$tekrar %in% 1, ]   # bildirideki analiz: ödev başına bir çağrı
+if (all(is.na(k1$kategori))) stop("Birinci kodlayıcı formunda kodlanmış ödev yok.", call. = FALSE)
 dagilim <- kategori_tablosu(k1$kategori, kat)
 print(dagilim)
 N <- sum(dagilim$n)
@@ -62,6 +76,7 @@ k2_yolu <- file.path(kodlama_dizini, "kodlayici2_tamamlanabilirlik.xlsx")
 uyusma <- NULL
 if (file.exists(k2_yolu)) {
   k2 <- xlsx_oku(k2_yolu)
+  if (!is.null(onayli)) k2 <- k2[k2$odev_id %in% onayli, ]
   ortak <- merge(k1[, c("odev_id", "kategori")], k2[, c("odev_id", "kategori")],
                  by = "odev_id", suffixes = c("_1", "_2"))
   if (sum(stats::complete.cases(ortak)) >= 2) {
@@ -85,21 +100,24 @@ if (file.exists(nitelik_yolu)) {
   nf <- xlsx_oku(nitelik_yolu, "nitelikler")
   kk <- xlsx_oku(nitelik_yolu, "kod_kitabi")
   sutunlar <- intersect(kk$sutun, names(nf))
-  # Kontrol listesinde artık onaylı olmayan ödevler çıkarılır (kontrol listesi
-  # yoksa, ör. özgün kodlar elle hazırlandıysa, şablondaki tüm ödevler alınır).
-  kontrol_yolu <- file.path(AYAR$veri_dizini, "kontrol_listesi.xlsx")
-  if (file.exists(kontrol_yolu)) {
-    kontrol <- xlsx_oku(kontrol_yolu)
-    onayli <- kontrol$odev_id[tolower(trimws(kontrol$kontrol_edildi %||% "")) %in% "evet"]
+  if (!is.null(onayli)) {
     cikan <- setdiff(nf$odev_id, onayli)
-    if (length(cikan) > 0) {
-      message("Onaylı olmadığı için nitelik analizine alınmayan ödev(ler): ", paste(cikan, collapse = ", "))
-      nf <- nf[nf$odev_id %in% onayli, ]
-    }
+    if (length(cikan) > 0) message("Onaylı olmadığı için nitelik analizine alınmayan ödev(ler): ", paste(cikan, collapse = ", "))
+    nf <- nf[nf$odev_id %in% onayli, ]
   }
-  # Koşullu alt kodlar (üst kod 0 ise boş = 0) tamamlanır; tutarsız ya da eksik
-  # kod varsa analiz açık bir hatayla durur (ödevler sessizce düşürülmez).
-  nf <- nitelikleri_denetle(nf, sutunlar)
+  # Koşullu alt kodlar (üst kod 0 ise boş = 0) tamamlanır. Tutarsız ya da eksik
+  # kod varsa nitelik çıktıları üretilmez (ödevler sessizce düşürülmez); bu
+  # durumda tamamlanabilirlik çıktıları yine de yazılır.
+  hic_kodlanmamis <- nrow(nf) > 0 && all(is.na(as.matrix(nf[, sutunlar, drop = FALSE])))
+  if (hic_kodlanmamis) {
+    message("Tasarım nitelikleri henüz kodlanmamış; nitelik çıktıları atlandı.")
+    nf <- nf[0, ]
+  } else {
+    nf <- tryCatch(nitelikleri_denetle(nf, sutunlar), error = function(e) {
+      message("UYARI: tasarım nitelikleri çıktıları üretilmedi: ", conditionMessage(e))
+      nf[0, ]
+    })
+  }
   if (nrow(nf) > 0) {
     nitelikler <- nitelik_tablosu(nf, sutunlar, kk$nitelik[match(sutunlar, kk$sutun)])
     print(nitelikler)
@@ -113,14 +131,14 @@ if (file.exists(nitelik_yolu)) {
     # Koşullu oranlar: bildirideki "83 ödevin 49'unda" türü ifadeler
     if (all(c("ozgu_girdi", "girdi_islevsel") %in% sutunlar)) {
       a <- sum(nf$ozgu_girdi == 1); b <- sum(nf$ozgu_girdi == 1 & nf$girdi_islevsel == 1)
-      ozet <- c(ozet, sprintf(
+      if (a > 0) ozet <- c(ozet, sprintf(
         "Öğrenciye özgü, kişisel veya yerel girdi isteyen %d ödevin yalnızca %s, yani bu ödevlerin %%%s ve tüm ödevlerin %%%s, söz konusu girdinin izleyen analiz veya yorumlama işlemlerinde kullanılması zorunlu tutulmuştur.",
         a, sayi_eki(b, "iyelik_bulunma"), sayi_eki(yuzde_tr(100 * b / a), "iyelik_bulunma"),
         sayi_eki(yuzde_tr(100 * b / nrow(nf)), "iyelik_bulunma")))
     }
     if (all(c("belgeleme", "belgeleme_yalniz_kanit") %in% sutunlar)) {
       a <- sum(nf$belgeleme == 1); b <- sum(nf$belgeleme == 1 & nf$belgeleme_yalniz_kanit == 1)
-      ozet <- c(ozet, sprintf("Belgeleme şartı içeren %d ödevin %s (%%%s) sunulan kanıtlar yalnızca görevin gerçekleştirildiğini belgelemektedir.",
+      if (a > 0) ozet <- c(ozet, sprintf("Belgeleme şartı içeren %d ödevin %s (%%%s) sunulan kanıtlar yalnızca görevin gerçekleştirildiğini belgelemektedir.",
                               a, sayi_eki(b, "iyelik_bulunma"), yuzde_tr(100 * b / a)))
     }
 

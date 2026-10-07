@@ -76,6 +76,7 @@ sayi_eki <- function(sayi, tur = c("iyelik", "iyelik_bulunma", "bulunma")) {
   s <- as.character(sayi)
   okunan <- if (grepl(",", s)) sub("^.*,", "", s) else s
   n <- as.numeric(okunan)
+  if (is.na(n) || !is.finite(n)) return(s)   # sayı değilse ek eklenmez
   son_sozcuk <- if (n == 0) "sıfır"
     else if (n %% 10 != 0) c("bir", "iki", "üç", "dört", "beş", "altı", "yedi", "sekiz", "dokuz")[n %% 10]
     else if (n %% 100 != 0) c("on", "yirmi", "otuz", "kırk", "elli", "altmış", "yetmiş", "seksen", "doksan")[(n %% 100) / 10]

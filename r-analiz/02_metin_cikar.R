@@ -59,19 +59,40 @@ for (i in seq_len(nrow(envanter))) {
   }
 
   metin <- if (is.na(r$metin)) "" else r$metin
-  txt_yaz(metin, file.path(ham_metin_dizini, paste0(id, ".txt")))
+  ham_yol <- file.path(ham_metin_dizini, paste0(id, ".txt"))
+  eski_ham <- if (file.exists(ham_yol)) txt_oku(ham_yol) else NA_character_
+  # Drive'daki dosya güncellendiyse ham metin değişir. Yönerge hiç
+  # düzenlenmemişse yeni metinle değiştirilir; elle düzenlenmişse yeni metin
+  # <id>.yeni.txt olarak yazılır ve araştırmacının karar vermesi beklenir.
+  # Her iki durumda da kontrol işareti sıfırlanır.
+  kaynak_degisti <- !is.na(eski_ham) && !identical(metin_temizle(eski_ham), metin_temizle(metin))
+  txt_yaz(metin, ham_yol)
   hedef <- file.path(yonerge_dizini, paste0(id, ".txt"))
-  if (!file.exists(hedef)) txt_yaz(metin, hedef)
+  yeni_surum <- ""
+  if (!file.exists(hedef)) {
+    txt_yaz(metin, hedef)
+  } else if (kaynak_degisti) {
+    if (identical(metin_temizle(txt_oku(hedef)), metin_temizle(eski_ham))) {
+      txt_yaz(metin, hedef)
+    } else {
+      yeni_surum <- file.path(yonerge_dizini, paste0(id, ".yeni.txt"))
+      txt_yaz(metin, yeni_surum)
+    }
+  }
 
+  # Göstergeler, API'ye GÖNDERİLECEK metin (yonergeler/<id>.txt) üzerinden
+  # hesaplanır; araştırmacının elle yazdığı ya da yapıştırdığı metin de taranır.
+  gonderilecek <- txt_oku(hedef)
   b <- r$bilgi
   kv <- names(kisisel_veri_oruntuleri)[vapply(kisisel_veri_oruntuleri,
-                                               function(p) grepl(p, metin, perl = TRUE), logical(1))]
+                                               function(p) grepl(p, gonderilecek, perl = TRUE), logical(1))]
   satirlar[[i]] <- data.frame(
     odev_id = id,
     uzanti = envanter$uzanti[i],
     yontem = r$yontem,
-    karakter = nchar(metin),
-    kelime = if (nzchar(metin)) lengths(strsplit(trimws(metin), "\\s+")) else 0L,
+    karakter = nchar(gonderilecek),
+    kelime = if (nzchar(trimws(gonderilecek))) lengths(strsplit(trimws(gonderilecek), "\\s+")) else 0L,
+    ham_karakter = nchar(metin),
     taranmis_olabilir = isTRUE(b$taranmis_olabilir),
     gorsel = b$gorsel_sayisi %||% NA,
     tablo = b$tablo_sayisi %||% NA,
@@ -79,8 +100,10 @@ for (i in seq_len(nrow(envanter))) {
     metin_kutusu = b$metin_kutusu_sayisi %||% NA,
     ust_alt_bilgi = b$ust_alt_bilgi %||% "",
     olasi_kisisel_veri = paste(kv, collapse = ", "),
-    yz_ifadesi_geciyor = grepl("(?i)yapay\\s*zek|chatgpt|\\bYZ\\b|\\bÜYZ\\b", metin, perl = TRUE),
+    yz_ifadesi_geciyor = grepl("(?i)yapay\\s*zek|chatgpt|\\bYZ\\b|\\bÜYZ\\b", gonderilecek, perl = TRUE),
     ayni_icerik = if (is.null(envanter$ayni_icerik) || is.na(envanter$ayni_icerik[i])) "" else envanter$ayni_icerik[i],
+    kaynak_degisti = kaynak_degisti,
+    yeni_surum = basename(yeni_surum),
     stringsAsFactors = FALSE
   )
 }
@@ -95,7 +118,10 @@ kontrol$dikkat <- trimws(paste(
   ifelse(nzchar(kontrol$olasi_kisisel_veri), "olası kişisel veri;", ""),
   ifelse(nzchar(kontrol$ust_alt_bilgi), "üst/alt bilgi var (gönderilmez);", ""),
   ifelse(nzchar(kontrol$ayni_icerik), "yinelenen dosya;", ""),
-  ifelse(grepl("HATA|yok|desteklenmeyen", kontrol$yontem), "okunamadı;", "")
+  ifelse(grepl("HATA|yok|desteklenmeyen", kontrol$yontem), "okunamadı;", ""),
+  ifelse(kontrol$kaynak_degisti & nzchar(kontrol$yeni_surum),
+         paste0("KAYNAK DOSYA DEĞİŞTİ: yeni metin ", kontrol$yeni_surum, " dosyasında, yönergeyi güncelleyin;"),
+         ifelse(kontrol$kaynak_degisti, "KAYNAK DOSYA DEĞİŞTİ: yönerge yeni metinle güncellendi, yeniden kontrol edin;", ""))
 ))
 
 # Önceki kontrol işaretleri korunur
@@ -111,13 +137,18 @@ if (file.exists(kontrol_yolu)) {
     kontrol[[s]][var] <- ifelse(is.na(deger), "", deger)
   }
 }
+kontrol$kontrol_edildi[kontrol$kaynak_degisti] <- ""   # değişen ödev yeniden kontrol edilmeli
+if (any(kontrol$kaynak_degisti)) {
+  message("UYARI: Drive'daki kaynak dosyası değişen ödev(ler): ",
+          paste(kontrol$odev_id[kontrol$kaynak_degisti], collapse = ", "),
+          ". Kontrol işaretleri sıfırlandı; 'dikkat' sütununa bakın.")
+}
 
 wb <- openxlsx::createWorkbook()
 openxlsx::addWorksheet(wb, "kontrol")
 openxlsx::writeDataTable(wb, "kontrol", kontrol, withFilter = TRUE)
 sutun <- which(names(kontrol) == "kontrol_edildi")
-openxlsx::dataValidation(wb, "kontrol", cols = sutun, rows = 2:(nrow(kontrol) + 1),
-                         type = "list", value = '"evet,hayır"')
+liste_dogrulama(wb, "kontrol", sutun, 2:(nrow(kontrol) + 1), c("evet", "hayır"))
 openxlsx::freezePane(wb, "kontrol", firstRow = TRUE, firstCol = TRUE)
 openxlsx::setColWidths(wb, "kontrol", cols = seq_along(kontrol), widths = "auto")
 xlsx_kaydet(wb, kontrol_yolu)

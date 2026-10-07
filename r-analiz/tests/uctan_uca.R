@@ -255,10 +255,16 @@ writeLines(c(sprintf('AYAR$taban_url <- "%s"', sub("/$", "", sunucu$url("/v1")))
 r <- adim("03_yz_cagri.R", proje)
 denetle(any(grepl("0 çağrı önceden tamamlanmış; 144 çağrı yapılacak", r$cikti)),
         "token sınırı değişince bütün ödevler yeniden çağrıldı")
-r <- adim("04_kodlama_formu.R", proje, beklenen_cikis = 1)
-denetle(r$durum != 0 && any(grepl("eski çıktılara aittir", r$cikti)), "04 eskimiş formu fark edip durdu")
 r <- adim("05_analiz.R", proje, beklenen_cikis = 1)
 denetle(r$durum != 0 && any(grepl("üretilmemiş", r$cikti)), "05 eski ayarlarla kodlanmış formu fark edip durdu")
+r <- adim("04_kodlama_formu.R", proje)
+denetle(r$durum == 0 && any(grepl("YENİDEN KODLAYIN", r$cikti)), "04 eskimiş satırları yeni çıktılarla değiştirdi")
+denetle(length(list.files("cikti/kodlama", "kodlayici1_tamamlanabilirlik_yedek_")) == 1, "değiştirmeden önce yedek alındı")
+f1y <- xlsx_oku("cikti/kodlama/kodlayici1_tamamlanabilirlik.xlsx")
+denetle(nrow(f1y) == 144 && all(is.na(f1y$kategori)) && all(grepl("_t1_", f1y$cagri_dosyasi)) &&
+          !any(f1y$cagri_dosyasi %in% f1$cagri_dosyasi), "yenilenen satırların kodu boşaltıldı, çağrı dosyası güncellendi")
+r <- adim("05_analiz.R", proje, beklenen_cikis = 1)
+denetle(r$durum != 0 && any(grepl("kodlanmış ödev yok", r$cikti)), "kodsuz formda 05 açık hatayla durdu")
 sunucu$stop()
 
 cat("\nKappa tablosu:\n"); print(kp)

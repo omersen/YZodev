@@ -31,6 +31,17 @@ xlsx_kaydet <- function(wb, yol) {
   invisible(yol)
 }
 
+# Açılır liste doğrulaması. openxlsx (4.2.5-4.2.9) liste doğrulamasında kendi
+# içindeki bir sprintf çağrısı yüzünden zararsız bir uyarı verir; üretilen XML
+# geçerlidir. Yalnızca bu uyarı bastırılır.
+liste_dogrulama <- function(wb, sayfa, sutun, satirlar, secenekler) {
+  withCallingHandlers(
+    openxlsx::dataValidation(wb, sayfa, cols = sutun, rows = satirlar, type = "list",
+                             value = paste0('"', paste(secenekler, collapse = ","), '"')),
+    warning = function(w) if (grepl("argument not used by format", conditionMessage(w))) invokeRestart("muffleWarning")
+  )
+}
+
 # Tek sayfalık tablo. İnsanların açıp bakacağı tablolar CSV yerine xlsx olarak
 # tutulur: Türkçe bölgesel ayarlı Excel, virgülle ayrılmış CSV'yi tek sütunda
 # açar ve kaydederken ayırıcıyı ve karakter kodlamasını değiştirir.
